@@ -1,0 +1,6 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": { "incremental": false, "types": ["chrome"], "plugins": [] },
+  "include": ["./**/*.ts", "../src/lib/capture/**/*.ts", "../src/lib/inspection/types.ts", "../src/lib/inspection/fields.ts", "../src/lib/inspection/readiness.ts", "../src/lib/inspection/parse-url.ts"],
+  "exclude": ["dist", "../node_modules"]
+}
