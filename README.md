@@ -1,83 +1,83 @@
 # Memoar
 
-Simpan postingan sosial ke library lokal, lalu temukan lagi lewat pencarian, filter, dan koleksi. Muse Spark otomatis membantu mengorganisasi konten setelah disimpan.
+Save social posts to a local library and find them again through search, filters, and collections. Muse Spark automatically organizes captured content after each save.
 
 ## Tech stack
 
-- Next.js 16, React 19, dan TypeScript.
-- Astryx dan StyleX untuk UI.
-- Chrome Extension Manifest V3 untuk capture postingan.
-- IndexedDB untuk library di extension dan cache di website.
-- Meta Muse Spark 1.3 melalui API server untuk analisis konten.
+- Next.js 16, React 19, and TypeScript.
+- Astryx and StyleX for the UI.
+- Chrome Extension Manifest V3 for post capture.
+- IndexedDB for the extension library and website cache.
+- Meta Muse Spark 1.3 through a server-side API for content analysis.
 
 ## How to install
 
-Siapkan Node.js 22+, npm, Chrome 112+, dan API key Meta untuk Muse Spark.
+Requires Node.js 22+, npm, Chrome 112+, and a Meta API key for Muse Spark.
 
 ```sh
 npm ci
 cp .env.example .env.local
 ```
 
-Isi `.env.local`:
+Fill in `.env.local`:
 
 ```dotenv
 MODEL_API_KEY=your_meta_api_key
 MEMOAR_ENRICHMENT_TOKEN=your_random_secret_at_least_24_characters
 ```
 
-Keduanya hanya untuk server. `MEMOAR_ENRICHMENT_TOKEN` adalah secret untuk koneksi lokal, bukan API key Meta. `NEXT_PUBLIC_MEMOAR_EXTENSION_ID` opsional karena extension dapat mengirim ID-nya saat membuka website.
+Both values stay on the server. `MEMOAR_ENRICHMENT_TOKEN` signs local access tokens; it is not a Meta API key. `NEXT_PUBLIC_MEMOAR_EXTENSION_ID` is optional because the extension can supply its ID when opening the website.
 
-Build extension dan jalankan website:
+Build the extension and start the website:
 
 ```sh
 npm run extension:build
 npm run dev
 ```
 
-Buka [http://localhost:3000](http://localhost:3000). Gunakan alamat ini dan profil Chrome yang sama dengan extension. Restart server setelah mengubah `.env.local`.
+Open [http://localhost:3000](http://localhost:3000) in the same Chrome profile as the extension. Use this exact address for the local connection. Restart the server after changing `.env.local`.
 
-## Import extension ke Chrome
+## Import the extension into Chrome
 
-1. Buka `chrome://extensions` dan aktifkan **Developer mode**.
-2. Klik **Load unpacked**, lalu pilih folder `extension/dist` dari proyek ini.
-3. Pin Memoar di toolbar Chrome.
-4. Klik ikon Memoar pada halaman web, lalu pilih **Your library** untuk menghubungkan extension dan mengimpor library ke website.
+1. Open `chrome://extensions` and enable **Developer mode**.
+2. Click **Load unpacked** and select the project's `extension/dist` folder.
+3. Pin Memoar to the Chrome toolbar.
+4. Click the Memoar icon on a web page, then choose **Your library** to connect the extension and import your library into the website.
 
-Jika perlu, masukkan ID extension dari `chrome://extensions` di [halaman setup](http://localhost:3000/setup). Setelah mengubah source extension, build ulang, klik **Reload** pada extension, lalu refresh tab sosial.
+If needed, copy the extension ID from `chrome://extensions` into the [setup page](http://localhost:3000/setup). After changing extension source, rebuild it, click **Reload** on its Chrome extension card, and refresh the social tab.
 
 ## How to use
 
-1. Buka postingan Instagram, Threads, atau Facebook yang didukung sampai kontennya terlihat.
-2. Klik ikon Memoar, lalu **Add to Memoar**. Biarkan postingan terbuka selama capture; carousel bisa berpindah slide.
-3. Tunggu **Saved to Memoar**, lalu klik **Open in Memoar**. Analisis AI berjalan di background.
-4. Cari kembali postingan lewat Explore, filter, atau koleksi. Detail postingan menampilkan konten tersimpan dan hasil AI.
+1. Open a supported Instagram, Threads, or Facebook post with its content visible.
+2. Click the Memoar icon, then **Add to Memoar**. Keep the post open during capture; carousels may move through slides.
+3. Wait for **Saved to Memoar**, then click **Open in Memoar**. AI analysis runs in the background.
+4. Find saved posts through Explore, filters, or collections. Open a post to see its captured content and AI results.
 
-Website mengambil pembaruan saat dashboard aktif, sekitar setiap 20 detik. Gunakan **Resync** untuk menyinkronkan secara manual.
+The website imports updates while the dashboard is active, about every 20 seconds. Use **Resync** to sync manually.
 
 ## Supported platforms
 
-| Platform | Konten / link yang didukung |
+| Platform | Supported content / links |
 | --- | --- |
-| Instagram | Post, carousel, dan Reel (`/p/`, `/reel/`, `/reels/`). |
-| Threads | Post teks dan media (`/@handle/post/id`, `/t/id`), termasuk domain `threads.net`. |
-| Facebook | Post, Reel, video, dan watch. Capture dapat parsial; video/watch hanya memiliki fallback link untuk preview. |
+| Instagram | Posts, carousels, and Reels (`/p/`, `/reel/`, `/reels/`). |
+| Threads | Text and media posts (`/@handle/post/id`, `/t/id`), including the `threads.net` domain. |
+| Facebook | Posts, Reels, videos, and watch links. Capture may be partial; video/watch previews fall back to the source link. |
 
-Gunakan link langsung ke postingan. Profil, Stories, link share/pendek, `permalink.php`, dan `story.php` belum didukung. Konten yang tidak berhasil ditangkap tetap ditandai tidak tersedia; dukungan link tidak menjamin semua media bisa diambil.
+Use direct post links. Profiles, Stories, share/short links, `permalink.php`, and `story.php` are not supported. Missing content stays marked as unavailable; a supported link does not guarantee that all media can be captured.
 
-## Alur Muse Spark
+## Muse Spark flow
 
-1. Extension menangkap konten postingan dari halaman yang dibuka setelah kamu menekan tombol simpan.
-2. Konten disimpan lebih dulu ke IndexedDB extension. Setelah itu, job analisis masuk antrean otomatis tanpa toggle AI.
-3. Website memasangkan extension ke API lokal. Worker extension mengirim teks dan media yang lolos validasi ke `/api/enrich`; server meneruskannya ke Muse Spark 1.3 menggunakan API key server.
-4. Muse Spark menghasilkan kategori, topik, ringkasan per slide, teks dalam gambar/video, objek, brand, dan kata kunci sesuai input yang tersedia. Jika media tidak tersedia, analisis dibatasi ke teks.
-5. Hasil kembali disimpan di extension dan disinkronkan ke website untuk pencarian serta related posts. Pencarian tidak memanggil AI lagi.
+1. The extension captures available post content from the open page after you click save.
+2. Content is saved to the extension's IndexedDB first, then automatically queued for analysis without an AI toggle.
+3. The website pairs the extension with the local API. The extension worker sends captured text and validated media to `/api/enrich`; the server forwards them to Muse Spark 1.3 using the server-side API key.
+4. Muse Spark returns categories, topics, per-slide summaries, visible text, objects, brands, and search keywords based on the supplied inputs. Analysis is text-only when media is unavailable.
+5. Results are stored in the extension and synced to the website for search and related posts. Searching does not make additional AI calls.
 
-Server lokal harus berjalan agar analisis bisa diproses. Job yang bisa dicoba ulang memiliki maksimal tiga percobaan; jika gagal, postingan tetap tersimpan dan bisa di-retry dari detailnya. Snapshot preview dan metadata oEmbed hanya untuk tampilan, bukan input AI.
+Keep the local server running for analysis. Retryable jobs get up to three attempts; failed analysis leaves the saved post intact, with a retry action in its details. Preview snapshots and oEmbed metadata are display-only and never enter AI inputs.
 
-## Penyimpanan dan batasan
+## Storage and limitations
 
-- Library utama ada di profil Chrome tempat extension dipasang. Website menyimpan salinan cache; belum ada cloud sync atau database server.
-- Analisis mengirim konten yang tersedia ke Meta dan dapat memakai kuota API. Simpan hanya konten yang kamu berhak proses; hasil AI tetap perlu diperiksa.
-- Video penuh tidak diarsipkan permanen. Export metadata tidak menyertakan file media asli dan bukan backup lengkap.
-- Menghapus extension atau storage browser dapat menghapus library. MVP ini berjalan lokal; belum ada deployment atau hosting enrichment produksi.
+- The main library lives in the Chrome profile where the extension is installed. The website keeps a cache; there is no cloud sync or server database.
+- Analysis sends available content to Meta and may use API quota. Only save content you are authorized to process, and review AI results.
+- Full videos are not archived permanently. Metadata exports exclude original media files and are not complete backups.
+- Removing the extension or clearing browser storage can erase the library. This MVP runs locally; production deployment and enrichment hosting are not configured.
