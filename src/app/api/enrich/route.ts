@@ -1,0 +1,91 @@
+import 'server-only';
+import { createHash } from 'node:crypto';
+import { validEnrichmentAccess } from '@/lib/library/enrichment-auth';
+import { normalizeCapture } from '@/lib/capture/normalize';
+import { enrichmentPrompt, enrichmentSchema, cleanVisibleText } from '@/lib/inspection/enrichment';
+import { parseEnrichment } from '@/lib/library/enrichment';
+import { modelExport } from '@/lib/inspection/model-export';
+
+export const runtime = 'nodejs';
+const json = (body: unknown, status = 200) => Response.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
+let windowStart = 0, calls = 0, active = false;
+export async function POST(request: Request) {
+  const expected = process.env.MEMOAR_ENRICHMENT_TOKEN?.trim();
+  const actual = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? '';
+  if (!expected || expected.length < 24 || !validEnrichmentAccess(actual, expected)) return json({ error: 'Open Memoar to reconnect background organizing.' }, 401);
+  if (new URL(request.url).origin !== 'http://localhost:3000' || request.headers.get('host') !== 'localhost:3000') return json({ error: 'AI processing is currently available on the local demo only.' }, 403);
+  const key = process.env.MODEL_API_KEY?.trim();
+  if (!key) return json({ error: 'Local AI processing is not configured yet.' }, 503);
+  if (Number(request.headers.get('content-length') ?? Infinity) > 53 * 1024 * 1024) return json({ error: 'Post media exceeds the local processing limit.' }, 413);
+  if (active) return json({ error: 'Another post is being organized. Retry shortly.' }, 429);
+  if (Date.now() - windowStart > 3600000) { windowStart = Date.now(); calls = 0; }
+  if (calls >= 20) return json({ error: 'The local hourly AI limit has been reached. Try later.' }, 429);
+  calls++; active = true;
+  const abort = new AbortController();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const encoder = new TextEncoder();
+      const send = (value: unknown) => { if (!abort.signal.aborted) controller.enqueue(encoder.encode(JSON.stringify(value) + '\n')); };
+      send({ type: 'heartbeat' });
+      const heartbeat = setInterval(() => send({ type: 'heartbeat' }), 15000);
+      void processCapture(request, key, abort.signal).then(async response => {
+        send({ type: 'result', ok: response.ok, ...await response.json() });
+      }).catch(() => send({ type: 'result', ok: false, error: 'AI processing was interrupted. Your post remains saved.' })).finally(() => {
+        clearInterval(heartbeat); active = false;
+        if (!abort.signal.aborted) controller.close();
+      });
+    },
+    cancel() { abort.abort(); },
+  });
+  return new Response(stream, { headers: { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' } });
+}
+
+async function processCapture(request: Request, key: string, cancelled: AbortSignal): Promise<Response> {
+  const uploaded: string[] = [];
+  const deadline = AbortSignal.any([request.signal, cancelled, AbortSignal.timeout(210000)]);
+  try {
+    const reader = request.body?.getReader();
+    if (!reader) return json({ error: 'No captured post was supplied.' }, 400);
+    const chunks: Uint8Array<ArrayBuffer>[] = []; let size = 0;
+    while (true) { const result = await reader.read(); if (result.done) break; size += result.value.byteLength; if (size > 53 * 1024 * 1024) { await reader.cancel(); return json({ error: 'Post media exceeds the local processing limit.' }, 413); } chunks.push(result.value); }
+    const form = await new Response(new Blob(chunks), { headers: { 'Content-Type': request.headers.get('content-type') ?? '' } }).formData();
+    const raw = form.get('capture');
+    if (typeof raw !== 'string') return json({ error: 'No captured post was supplied.' }, 400);
+    const capture = normalizeCapture(JSON.parse(raw));
+    const inspection = capture.inspection;
+    const context = modelExport(inspection, 'museSpark').inputs.text;
+    const content: unknown[] = [], videoAudio: unknown[] = [];
+    for (const [index, item] of (inspection.media?.items ?? []).entries()) {
+      const file = form.get(`media-${index}`);
+      if (!(file instanceof File) || !item.verification || item.assetAccess !== 'verified_accessible') continue;
+      if (!['image/jpeg', 'image/png', 'image/webp', 'video/mp4'].includes(file.type) || file.type !== item.verification.mimeType || file.size !== item.verification.byteLength) return json({ error: 'Captured media no longer matches its verification.' }, 400);
+      const bytes = Buffer.from(await file.arrayBuffer());
+      content.push({ type: 'input_text', text: `Slide position: ${item.position ?? 'unknown'}` });
+      if (file.type === 'video/mp4') {
+        if (!item.verification.sha256 || createHash('sha256').update(bytes).digest('hex') !== item.verification.sha256) return json({ error: 'Video bytes could not be verified. Save this post again.' }, 400);
+        const upload = new FormData(); upload.set('purpose', 'user_data'); upload.set('file', new Blob([bytes], { type: 'video/mp4' }), 'video.mp4');
+        upload.set('expires_after[anchor]', 'created_at'); upload.set('expires_after[seconds]', '3600');
+        const response = await fetch('https://api.meta.ai/v1/files', { method: 'POST', headers: { Authorization: `Bearer ${key}` }, body: upload, redirect: 'error', signal: AbortSignal.any([deadline, AbortSignal.timeout(90000)]) });
+        if (!response.ok) throw new Error('Video upload is temporarily unavailable.');
+        const data = await response.json();
+        if (typeof data.id !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(data.id)) throw new Error('Video upload returned no file reference.');
+        uploaded.push(data.id); content.push({ type: 'input_video', file_id: data.id });
+        videoAudio.push({ position: item.position, audio: item.verification.audio, durationSeconds: item.verification.durationSeconds });
+      } else content.push({ type: 'input_image', image_url: `data:${file.type};base64,${bytes.toString('base64')}` });
+    }
+    if (!content.length && !context.caption) return json({ error: 'No usable text or media is stored. Open and save this post again.' }, 422);
+    const analyzedMedia = content.length / 2;
+    const missingMedia = (inspection.media?.items.length ?? 0) - analyzedMedia;
+    const inputNote = analyzedMedia ? `Organized from ${analyzedMedia} supplied media ${analyzedMedia === 1 ? 'item' : 'items'}${context.caption ? ' and captured text' : ''}.${missingMedia > 0 ? ` ${missingMedia} captured media ${missingMedia === 1 ? 'item was' : 'items were'} not analyzed.` : ''}` : 'Organized from captured text only. Images and video were not analyzed.';
+    content.unshift({ type: 'input_text', text: `${enrichmentPrompt}\nCapture is ${inspection.media?.completeness === 'partial' || missingMedia > 0 ? 'partial; only supplied slides are available' : 'limited to supplied content'}.\nCaptured context: ${JSON.stringify(context)}\nMP4 audio-track evidence (presence does not establish speech): ${JSON.stringify(videoAudio)}` });
+    const response = await fetch('https://api.meta.ai/v1/responses', { method: 'POST', headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'muse-spark-1.3', store: false, reasoning: { effort: 'low' }, max_output_tokens: 8192, text: { format: { type: 'json_schema', name: 'content_enrichment', strict: true, schema: enrichmentSchema } }, input: [{ type: 'message', role: 'user', content }] }), redirect: 'error', signal: AbortSignal.any([deadline, AbortSignal.timeout(120000)]) });
+    if (!response.ok) return json({ error: response.status === 429 ? 'AI is busy. Your post stays saved; retry later.' : 'AI could not organize this post. Your saved copy is safe.' }, 502);
+    const data = await response.json();
+    const text = data.output_text || (Array.isArray(data.output) ? data.output.flatMap((item: { content?: { type: string; text?: string }[] }) => item.content ?? []).filter((item: { type: string }) => item.type === 'output_text').map((item: { text?: string }) => item.text ?? '').join('') : '');
+    const enrichment = parseEnrichment(JSON.parse(text)); enrichment.visibleText = cleanVisibleText(enrichment.visibleText);
+    return json({ enrichment, inputNote });
+  } catch { return json({ error: 'AI processing did not finish. Your post remains saved; try again later.' }, 502); }
+  finally {
+    await Promise.allSettled(uploaded.map(id => fetch(`https://api.meta.ai/v1/files/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { Authorization: `Bearer ${key}` }, redirect: 'error', signal: AbortSignal.timeout(10000) })));
+  }
+}

@@ -488,6 +488,9 @@
           world: "ISOLATED",
           args: [candidate, url],
           func: (target, expectedUrl) => {
+            const panel = globalThis.__memoarPopover?.host.getBoundingClientRect();
+            const region2 = target.region;
+            if (panel && panel.left < region2.x + region2.width && panel.right > region2.x && panel.top < region2.y + region2.height && panel.bottom > region2.y) return false;
             const node = document.querySelectorAll("img, video")[target.mediaIndex];
             if (!node || location.href !== expectedUrl || (node.currentSrc || node.getAttribute("src") || "") !== target.mediaSource) return false;
             const r = node.getBoundingClientRect(), b = target.region;
@@ -640,7 +643,509 @@
     return { base64 };
   }
 
+  // src/lib/library/store.ts
+  function libraryStore(name) {
+    let opening;
+    function open() {
+      if (!opening) opening = new Promise((resolve, reject) => {
+        const request = indexedDB.open(name, 2);
+        request.onupgradeneeded = () => {
+          if (!request.result.objectStoreNames.contains("posts")) request.result.createObjectStore("posts", { keyPath: "id" });
+          if (!request.result.objectStoreNames.contains("assets")) request.result.createObjectStore("assets", { keyPath: "key" });
+          const assets = request.transaction.objectStore("assets");
+          if (!assets.indexNames.contains("postId")) assets.createIndex("postId", "postId");
+        };
+        request.onsuccess = () => {
+          request.result.onversionchange = () => {
+            request.result.close();
+            opening = void 0;
+          };
+          resolve(request.result);
+        };
+        request.onerror = () => {
+          opening = void 0;
+          reject(new Error("Local storage could not be opened. Check browser storage permissions."));
+        };
+        request.onblocked = () => {
+          opening = void 0;
+          reject(new Error("Close other Memoar tabs and retry."));
+        };
+      });
+      return opening;
+    }
+    async function read(store, key2, index) {
+      const db = await open();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(store, "readonly");
+        const request = index ? tx.objectStore(store).index(index).getAll(key2) : key2 === void 0 ? tx.objectStore(store).getAll() : tx.objectStore(store).get(key2);
+        tx.oncomplete = () => resolve(request.result);
+        tx.onabort = tx.onerror = () => reject(new Error("Could not read the local library."));
+      });
+    }
+    async function write(action) {
+      const db = await open();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(["posts", "assets"], "readwrite");
+        action(tx.objectStore("posts"), tx.objectStore("assets"));
+        tx.oncomplete = () => resolve();
+        tx.onabort = tx.onerror = () => reject(new Error("Could not save changes. Browser storage may be full."));
+      });
+    }
+    return {
+      list: () => read("posts"),
+      get: (id) => read("posts", id),
+      assets: async (id) => (await read("assets", id, "postId")).filter((asset) => !asset.temporaryUntil || asset.temporaryUntil > Date.now()),
+      put: (post, assets) => write((posts, store) => {
+        posts.put(post);
+        if (assets) for (const asset of assets) store.put({ ...asset, key: `${post.id}:${asset.itemIndex}`, postId: post.id });
+      }),
+      update: async (id, update) => write((posts) => {
+        const request = posts.get(id);
+        request.onsuccess = () => {
+          if (request.result) posts.put(update(request.result));
+        };
+      }),
+      cacheAsset: (id, asset) => write((posts, assets) => {
+        const request = posts.get(id);
+        request.onsuccess = () => {
+          if (request.result) assets.put({ ...asset, key: `${id}:${asset.itemIndex}`, postId: id });
+        };
+      }),
+      remove: (id) => write((posts, assets) => {
+        posts.delete(id);
+        const request = assets.openCursor();
+        request.onsuccess = () => {
+          const cursor = request.result;
+          if (cursor) {
+            if (cursor.value.postId === id) cursor.delete();
+            cursor.continue();
+          }
+        };
+      }),
+      clear: () => write((posts, assets) => {
+        posts.clear();
+        assets.clear();
+      }),
+      reconcile: (records) => write((posts, assets) => {
+        const ids = new Set(records.map((post) => post.id));
+        const old = posts.openCursor();
+        old.onsuccess = () => {
+          const cursor = old.result;
+          if (cursor) {
+            if (!ids.has(String(cursor.key))) cursor.delete();
+            cursor.continue();
+          }
+        };
+        const media = assets.openCursor();
+        media.onsuccess = () => {
+          const cursor = media.result;
+          if (cursor) {
+            if (!ids.has(cursor.value.postId)) cursor.delete();
+            cursor.continue();
+          }
+        };
+        for (const post of records) posts.put(post);
+      }),
+      purgeTemporary: () => write((_posts, assets) => {
+        const request = assets.openCursor();
+        request.onsuccess = () => {
+          const cursor = request.result;
+          if (cursor) {
+            if (cursor.value.temporaryUntil && cursor.value.temporaryUntil <= Date.now()) cursor.delete();
+            cursor.continue();
+          }
+        };
+      }),
+      dropTemporary: (id, savedAt) => write((posts, assets) => {
+        const post = posts.get(id);
+        post.onsuccess = () => {
+          if (!post.result || post.result.savedAt !== savedAt) return;
+          const request = assets.index("postId").openCursor(IDBKeyRange.only(id));
+          request.onsuccess = () => {
+            const cursor = request.result;
+            if (cursor) {
+              if (cursor.value.temporaryUntil) cursor.delete();
+              cursor.continue();
+            }
+          };
+        };
+      })
+    };
+  }
+
+  // src/lib/library/types.ts
+  var defaultPreferences = { aiEnabled: true, reminders: true, cadence: "daily", ageDays: 0 };
+
+  // src/lib/inspection/enrichment.ts
+  var strings = { type: "array", items: { type: "string" } };
+  var nullableString = { type: ["string", "null"] };
+  var enrichmentSchema = {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      category: nullableString,
+      topics: strings,
+      visualDescription: nullableString,
+      slides: { type: "array", items: {
+        type: "object",
+        additionalProperties: false,
+        properties: { position: { type: ["integer", "null"] }, summary: nullableString, keyInsights: strings },
+        required: ["position", "summary", "keyInsights"]
+      } },
+      objects: { type: "array", items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          name: nullableString,
+          type: nullableString,
+          position: {
+            type: "object",
+            additionalProperties: false,
+            properties: { slide: { type: ["integer", "null"] }, region: nullableString },
+            required: ["slide", "region"]
+          },
+          attributes: strings,
+          evidence: { type: "array", items: {
+            type: "object",
+            additionalProperties: false,
+            properties: { claim: { type: "string" }, source: { type: "string", enum: ["visual", "visible_text", "caption"] }, text: nullableString },
+            required: ["claim", "source", "text"]
+          } }
+        },
+        required: ["name", "type", "position", "attributes", "evidence"]
+      } },
+      brands: { type: "array", items: {
+        type: "object",
+        additionalProperties: false,
+        properties: { name: { type: "string" }, sources: { type: "array", items: { type: "string", enum: ["visual", "visible_text", "caption", "author_metadata"] } } },
+        required: ["name", "sources"]
+      } },
+      visibleText: strings,
+      rawVisibleText: strings,
+      visualKeywords: strings,
+      searchableKeywords: strings,
+      captionContext: {
+        type: "object",
+        additionalProperties: false,
+        properties: { summary: nullableString, productNames: strings, locations: strings },
+        required: ["summary", "productNames", "locations"]
+      }
+    },
+    required: ["category", "topics", "visualDescription", "slides", "objects", "brands", "visibleText", "rawVisibleText", "visualKeywords", "searchableKeywords", "captionContext"]
+  };
+
+  // src/lib/library/enrichment.ts
+  function parseEnrichment(value) {
+    function validate(input, schema, depth = 0) {
+      if (depth > 15) return false;
+      const kind = input === null ? "null" : Array.isArray(input) ? "array" : typeof input;
+      const types = Array.isArray(schema.type) ? schema.type : [schema.type];
+      if (!types.some((type) => type === kind || type === "integer" && Number.isSafeInteger(input))) return false;
+      if (schema.enum && !schema.enum.includes(input)) return false;
+      if (typeof input === "string" && input.length > 64e3) return false;
+      if (Array.isArray(input)) return input.length <= 2e3 && input.every((item) => schema.items && validate(item, schema.items, depth + 1));
+      if (kind === "object") {
+        const object = input;
+        if (schema.required?.some((key2) => !Object.hasOwn(object, key2))) return false;
+        return Object.entries(object).every(([key2, item]) => schema.properties?.[key2] ? validate(item, schema.properties[key2], depth + 1) : schema.additionalProperties !== false);
+      }
+      return true;
+    }
+    if (!validate(value, enrichmentSchema)) throw new Error("AI returned an incomplete result. Try organizing this post again.");
+    return value;
+  }
+
+  // src/lib/library/review.ts
+  var REVIEW_DEMO_INTERVAL_MS = 3 * 60 * 1e3;
+  function reviewIntervalMs(cadence) {
+    return cadence === "daily" ? REVIEW_DEMO_INTERVAL_MS : (cadence === "weekly" ? 7 : 30) * 864e5;
+  }
+
+  // extension/library.ts
+  var savedLibrary = libraryStore("memoar-library");
+  async function preferences() {
+    const stored = await chrome.storage.local.get(["preferences", "reviewDefaultsApplied"]);
+    const prefs = { ...defaultPreferences, ...stored.preferences, aiEnabled: true, reminders: true };
+    if (stored.reviewDefaultsApplied !== true) {
+      prefs.cadence = "daily";
+      prefs.ageDays = 0;
+      await chrome.storage.local.set({ preferences: prefs, reviewDefaultsApplied: true });
+    }
+    return prefs;
+  }
+  async function saveToLibrary(captureId, capture) {
+    const parsed = parsePostUrl(capture.inspection.normalizedUrl);
+    const id = `${parsed.platform}:${parsed.postId}`;
+    const previous = await savedLibrary.get(id);
+    if (previous) return previous;
+    const prefs = await preferences();
+    const assets = [];
+    let note = null;
+    const manifest = await claimMediaTransfer(captureId) ?? [];
+    let storedImages = 0;
+    for (const asset of manifest) {
+      const video = asset.mimeType === "video/mp4";
+      if (!video && storedImages + asset.byteLength > 12 * 1024 * 1024 || video && !prefs.aiEnabled) {
+        note = "Some media is available only through the original post.";
+        continue;
+      }
+      try {
+        const bytes = new Uint8Array(asset.byteLength);
+        for (let offset = 0; offset < bytes.length; offset += MEDIA_CHUNK_BYTES) {
+          const chunk = await transferMedia({ type: "TAKE_MEDIA_CHUNK", captureId, itemIndex: asset.itemIndex, offset });
+          const decoded = atob(chunk.base64 ?? "");
+          if (decoded.length !== Math.min(MEDIA_CHUNK_BYTES, bytes.length - offset)) throw new Error("Incomplete media.");
+          for (let i = 0; i < decoded.length; i++) bytes[offset + i] = decoded.charCodeAt(i);
+        }
+        assets.push({ itemIndex: asset.itemIndex, mimeType: asset.mimeType, blob: new Blob([bytes], { type: asset.mimeType }), ...video ? { temporaryUntil: Date.now() + 864e5 } : {} });
+        if (!video) storedImages += asset.byteLength;
+      } catch {
+        note = "Some media could not be stored. Your captured text and available preview are saved.";
+      }
+    }
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    const post = {
+      version: 1,
+      id,
+      capture,
+      savedAt: now,
+      updatedAt: now,
+      aiStatus: "pending",
+      aiConsent: prefs.aiEnabled,
+      aiError: null,
+      enrichment: null,
+      attempts: 0,
+      nextAttemptAt: 0,
+      leaseUntil: 0,
+      model: null,
+      mediaStored: assets.filter((asset) => !asset.temporaryUntil).map((asset) => asset.itemIndex),
+      mediaNote: note
+    };
+    await savedLibrary.put(post, assets);
+    return post;
+  }
+  var working = false;
+  async function runEnrichmentQueue() {
+    if (working) return;
+    working = true;
+    try {
+      await savedLibrary.purgeTemporary();
+      if (!(await preferences()).aiEnabled) return;
+      for (const item of await savedLibrary.list()) {
+        if (!item.aiConsent) await savedLibrary.update(item.id, (value) => ({ ...value, aiConsent: true, nextAttemptAt: 0, updatedAt: (/* @__PURE__ */ new Date()).toISOString() }));
+        if (item.aiStatus === "processing" && item.leaseUntil <= Date.now() && item.attempts >= 3) await savedLibrary.update(item.id, (value) => ({ ...value, aiStatus: "failed_terminal", aiError: "Processing was interrupted. Retry organizing when ready.", leaseUntil: 0, updatedAt: (/* @__PURE__ */ new Date()).toISOString() }));
+      }
+      const token = (await chrome.storage.local.get("enrichmentAccessCode")).enrichmentAccessCode;
+      const post = (await savedLibrary.list()).find((item) => item.aiConsent && item.nextAttemptAt <= Date.now() && (item.aiStatus === "pending" || item.aiStatus === "failed_retryable" || item.aiStatus === "processing" && item.leaseUntil <= Date.now()) && item.attempts < 3);
+      if (!post) return;
+      if (typeof token !== "string" || !token) {
+        await savedLibrary.update(post.id, (value) => ({ ...value, aiStatus: "failed_retryable", aiError: "Open Memoar to connect background organizing.", nextAttemptAt: Date.now() + 3e5, updatedAt: (/* @__PURE__ */ new Date()).toISOString() }));
+        return;
+      }
+      await savedLibrary.update(post.id, (value) => ({ ...value, aiStatus: "processing", attempts: value.attempts + 1, leaseUntil: Date.now() + 3e5, updatedAt: (/* @__PURE__ */ new Date()).toISOString() }));
+      const keepAlive = setInterval(() => {
+        void chrome.runtime.getPlatformInfo().catch(() => {
+        });
+      }, 2e4);
+      try {
+        const form = new FormData();
+        form.set("capture", JSON.stringify(post.capture));
+        for (const asset of await savedLibrary.assets(post.id)) form.append(`media-${asset.itemIndex}`, asset.blob, `slide-${asset.itemIndex}.${asset.mimeType === "video/mp4" ? "mp4" : "image"}`);
+        const response = await fetch(`${MEMOAR_ORIGIN}/api/enrich`, { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: form, redirect: "error", signal: AbortSignal.timeout(24e4) });
+        if (!response.ok) {
+          const failure = await response.json();
+          throw new Error(typeof failure.error === "string" ? failure.error : "AI processing is temporarily unavailable.");
+        }
+        const reader = response.body?.getReader();
+        if (!reader) throw new Error("AI processing returned no result.");
+        const decoder = new TextDecoder();
+        let buffer = "", result;
+        try {
+          while (true) {
+            const chunk = await reader.read();
+            if (chunk.done) break;
+            buffer += decoder.decode(chunk.value, { stream: true });
+            if (buffer.length > 2 * 1024 * 1024) throw new Error("AI result exceeded its size limit.");
+            let end;
+            while ((end = buffer.indexOf("\n")) >= 0) {
+              const line = buffer.slice(0, end);
+              buffer = buffer.slice(end + 1);
+              if (!line.trim()) continue;
+              const event = JSON.parse(line);
+              if (event.type === "result") result = event;
+            }
+          }
+        } finally {
+          reader.releaseLock();
+        }
+        if (!result?.ok) throw new Error(result?.error || "AI processing was interrupted. Try again.");
+        const enrichment = parseEnrichment(result.enrichment);
+        await savedLibrary.update(post.id, (value) => value.savedAt !== post.savedAt ? value : { ...value, aiStatus: "completed", enrichment, model: "muse-spark-1.3", aiInputNote: result?.inputNote, aiError: null, leaseUntil: 0, updatedAt: (/* @__PURE__ */ new Date()).toISOString() });
+        await savedLibrary.dropTemporary(post.id, post.savedAt);
+      } catch (error) {
+        await savedLibrary.update(post.id, (value) => value.savedAt !== post.savedAt ? value : { ...value, aiStatus: value.attempts >= 3 ? "failed_terminal" : "failed_retryable", aiError: error instanceof Error ? error.message.slice(0, 300) : "Could not organize this post.", leaseUntil: 0, nextAttemptAt: Date.now() + value.attempts * 6e4, updatedAt: (/* @__PURE__ */ new Date()).toISOString() });
+      } finally {
+        clearInterval(keepAlive);
+      }
+    } finally {
+      working = false;
+    }
+  }
+  async function libraryMessage(request) {
+    switch (request.type) {
+      case "MEMOAR_TEST_NOTIFICATION":
+      case "MEMOAR_NOTIFICATION_STATUS":
+        throw new Error("Notification requests must be handled by the background worker.");
+      case "MEMOAR_SET_ACCESS_CODE":
+        await chrome.storage.local.set({ enrichmentAccessCode: request.code });
+        for (const post of await savedLibrary.list()) if (post.aiConsent && post.aiStatus === "failed_retryable" && post.attempts === 0) await savedLibrary.update(post.id, (value) => ({ ...value, aiStatus: "pending", aiError: null, nextAttemptAt: 0, updatedAt: (/* @__PURE__ */ new Date()).toISOString() }));
+        return {};
+      case "MEMOAR_PING":
+        return { protocolVersion: 1, version: chrome.runtime.getManifest().version };
+      case "MEMOAR_LIBRARY_SUMMARY": {
+        const posts = await savedLibrary.list();
+        return { count: posts.length, revision: posts.map((post) => `${post.id}:${post.updatedAt}`).sort().join("|") };
+      }
+      case "MEMOAR_LIST_POSTS": {
+        const posts = (await savedLibrary.list()).sort((a, b) => a.id.localeCompare(b.id));
+        return { posts: posts.slice(request.offset, request.offset + 4), total: posts.length };
+      }
+      case "MEMOAR_GET_POST":
+        return { post: await savedLibrary.get(request.id) ?? null };
+      case "MEMOAR_GET_ASSET": {
+        const asset = (await savedLibrary.assets(request.id)).find((item) => item.itemIndex === request.itemIndex && !item.temporaryUntil);
+        if (!asset || request.offset >= asset.blob.size || request.offset % MEDIA_CHUNK_BYTES) throw new Error("Saved image is unavailable.");
+        const bytes = new Uint8Array(await asset.blob.slice(request.offset, request.offset + MEDIA_CHUNK_BYTES).arrayBuffer());
+        let text = "";
+        for (let i = 0; i < bytes.length; i += 16384) text += String.fromCharCode(...bytes.subarray(i, i + 16384));
+        return { base64: btoa(text), byteLength: asset.blob.size, mimeType: asset.mimeType };
+      }
+      case "MEMOAR_DELETE_POST":
+        await savedLibrary.remove(request.id);
+        return {};
+      case "MEMOAR_CLEAR":
+        await savedLibrary.clear();
+        return {};
+      case "MEMOAR_REVIEW": {
+        const interval = reviewIntervalMs((await preferences()).cadence);
+        await savedLibrary.update(request.id, (post) => ({ ...post, ...request.action === "open" ? { lastOpenedAt: (/* @__PURE__ */ new Date()).toISOString() } : request.action === "keep" ? { lastReviewedAt: (/* @__PURE__ */ new Date()).toISOString(), remindAfter: void 0 } : { remindAfter: new Date(Date.now() + interval).toISOString() }, updatedAt: (/* @__PURE__ */ new Date()).toISOString() }));
+        return {};
+      }
+      case "MEMOAR_RETRY_AI":
+        await savedLibrary.update(request.id, (post) => ({ ...post, aiStatus: "pending", aiConsent: true, attempts: 0, nextAttemptAt: 0, aiError: null, updatedAt: (/* @__PURE__ */ new Date()).toISOString() }));
+        return {};
+      case "MEMOAR_PREFERENCES":
+        return { preferences: await preferences() };
+      case "MEMOAR_SET_PREFERENCES": {
+        const prefs = { aiEnabled: true, reminders: true, cadence: request.cadence, ageDays: request.ageDays };
+        await chrome.storage.local.set({ preferences: prefs });
+        if (prefs.aiEnabled) {
+          for (const post of await savedLibrary.list()) if (!post.aiConsent) await savedLibrary.update(post.id, (value) => ({ ...value, aiConsent: true, nextAttemptAt: 0, updatedAt: (/* @__PURE__ */ new Date()).toISOString() }));
+        }
+        return { preferences: prefs };
+      }
+    }
+  }
+
+  // src/lib/library/protocol.ts
+  function isLibraryRequest(value) {
+    if (!isRecord(value) || typeof value.type !== "string") return false;
+    const only = (...keys) => Object.keys(value).every((key2) => ["type", ...keys].includes(key2));
+    if (["MEMOAR_PING", "MEMOAR_LIBRARY_SUMMARY", "MEMOAR_PREFERENCES", "MEMOAR_CLEAR", "MEMOAR_TEST_NOTIFICATION", "MEMOAR_NOTIFICATION_STATUS"].includes(value.type)) return only();
+    if (value.type === "MEMOAR_SET_ACCESS_CODE") return only("code") && typeof value.code === "string" && value.code.length >= 24 && value.code.length <= 256;
+    if (value.type === "MEMOAR_LIST_POSTS") return only("offset") && Number.isSafeInteger(value.offset) && Number(value.offset) >= 0 && Number(value.offset) <= 1e5;
+    if (value.type === "MEMOAR_SET_PREFERENCES") return only("aiEnabled", "reminders", "cadence", "ageDays") && typeof value.aiEnabled === "boolean" && typeof value.reminders === "boolean" && ["daily", "weekly", "monthly"].includes(String(value.cadence)) && [0, 1, 30, 60, 90].includes(Number(value.ageDays));
+    if (typeof value.id !== "string" || value.id.length > 300 || !/^(instagram|threads|facebook):[^\s]+$/.test(value.id)) return false;
+    if (value.type === "MEMOAR_GET_ASSET") return only("id", "itemIndex", "offset") && Number.isInteger(value.itemIndex) && Number(value.itemIndex) >= 0 && Number(value.itemIndex) < 20 && Number.isSafeInteger(value.offset) && Number(value.offset) >= 0 && Number(value.offset) < 50 * 1024 * 1024;
+    if (value.type === "MEMOAR_REVIEW") return only("id", "action") && ["keep", "later", "open"].includes(String(value.action));
+    return ["MEMOAR_GET_POST", "MEMOAR_DELETE_POST", "MEMOAR_RETRY_AI"].includes(value.type) && only("id");
+  }
+
+  // src/lib/library/search.ts
+  var postTitle = (post) => post.enrichment?.slides.find((slide) => slide.summary)?.summary || post.capture.inspection.fields.captionText.value || post.capture.inspection.fields.textContent.value || "Saved post";
+
+  // extension/notifications.ts
+  var alarmName = "memoar-revisit";
+  var prefix = "memoar-revisit:";
+  var intervalMinutes = 3;
+  var sending = false;
+  async function notificationState() {
+    const value = await chrome.storage.local.get("notificationState");
+    return value.notificationState ?? {};
+  }
+  async function ensureNotificationAlarm() {
+    const alarm = await chrome.alarms.get(alarmName);
+    if (!alarm || alarm.periodInMinutes !== intervalMinutes) await chrome.alarms.create(alarmName, { delayInMinutes: intervalMinutes, periodInMinutes: intervalMinutes });
+  }
+  async function notificationStatus() {
+    const [permission, alarm, state] = await Promise.all([
+      chrome.notifications.getPermissionLevel(),
+      chrome.alarms.get(alarmName),
+      notificationState()
+    ]);
+    return { permission, intervalMinutes, nextAt: alarm?.scheduledTime ?? null, error: state.error ?? null };
+  }
+  async function sendSavedPostNotification(test = false) {
+    if (sending) throw new Error("A notification is already being sent. Try again in a moment.");
+    sending = true;
+    try {
+      if (await chrome.notifications.getPermissionLevel() !== "granted") throw new Error("Notifications are blocked for Memoar. Allow them in Chrome\u2019s extension settings.");
+      const state = await notificationState();
+      if (!test && typeof state?.lastSentAt === "number" && Date.now() - state.lastSentAt < intervalMinutes * 6e4) return {};
+      const posts = (await savedLibrary.list()).sort((a, b) => a.savedAt.localeCompare(b.savedAt) || a.id.localeCompare(b.id));
+      if (!posts.length) {
+        if (test) throw new Error("Save a post first so the test notification can open its details.");
+        return {};
+      }
+      const previousIndex = posts.findIndex((post2) => post2.id === state?.postId);
+      const post = posts[(previousIndex + 1) % posts.length];
+      const active = await chrome.notifications.getAll();
+      await Promise.all(Object.keys(active).filter((id) => id.startsWith(prefix)).map((id) => chrome.notifications.clear(id)));
+      await chrome.notifications.create(prefix + encodeURIComponent(post.id), {
+        type: "basic",
+        iconUrl: chrome.runtime.getURL("memoar-icon.png"),
+        title: test ? "Memoar \xB7 Test notification" : "Worth revisiting?",
+        message: postTitle(post).replace(/\s+/g, " ").trim().slice(0, 160),
+        contextMessage: "Click to open this saved post in Memoar."
+      });
+      await chrome.storage.local.set({ notificationState: { postId: post.id, lastSentAt: Date.now(), error: null } });
+      return { postId: post.id };
+    } catch (error) {
+      const previous = await notificationState();
+      await chrome.storage.local.set({ notificationState: { ...previous, error: error instanceof Error ? error.message : "Could not send a notification." } });
+      throw error;
+    } finally {
+      sending = false;
+    }
+  }
+  function initializeNotifications() {
+    const schedule = () => {
+      void ensureNotificationAlarm().catch(() => {
+      });
+    };
+    chrome.runtime.onInstalled.addListener(schedule);
+    chrome.runtime.onStartup.addListener(schedule);
+    chrome.alarms.onAlarm.addListener((alarm) => {
+      if (alarm.name === alarmName) void sendSavedPostNotification().catch(() => {
+      });
+    });
+    chrome.notifications.onClicked.addListener((notificationId) => {
+      if (!notificationId.startsWith(prefix)) return;
+      void (async () => {
+        const id = decodeURIComponent(notificationId.slice(prefix.length));
+        const post = await savedLibrary.get(id);
+        const url = new URL(post ? `/app/saved/${encodeURIComponent(post.id)}` : "/app/explore", MEMOAR_ORIGIN);
+        url.searchParams.set("extensionId", chrome.runtime.id);
+        await chrome.tabs.create({ url: url.href });
+        await chrome.notifications.clear(notificationId);
+      })().catch(() => {
+      });
+    });
+    schedule();
+  }
+
   // extension/background.ts
+  initializeNotifications();
   var session = createCaptureSession({
     get: async () => (await chrome.storage.session.get("pending")).pending ?? null,
     set: async (value) => {
@@ -651,25 +1156,52 @@
     }
   });
   void chrome.storage.session.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
+  void chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
   void session.peek();
   chrome.runtime.onStartup.addListener(() => {
     void session.peek();
   });
+  var resumeQueue = () => {
+    void runEnrichmentQueue().catch(() => {
+    });
+  };
+  chrome.runtime.onStartup.addListener(resumeQueue);
+  chrome.runtime.onInstalled.addListener(() => {
+    void chrome.alarms.create("memoar-enrichment", { periodInMinutes: 1 });
+    resumeQueue();
+  });
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === "memoar-enrichment") resumeQueue();
+  });
+  void chrome.alarms.create("memoar-enrichment", { periodInMinutes: 1 });
+  chrome.action.onClicked.addListener((tab) => {
+    if (!tab.id) return;
+    const tabId = tab.id;
+    void chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, world: "ISOLATED", files: ["popover.js"] }).then(() => {
+      void chrome.action.setBadgeText({ tabId, text: "" });
+      void chrome.action.setTitle({ tabId, title: "Memoar" });
+    }).catch(() => {
+      void chrome.action.setBadgeText({ tabId, text: "!" });
+      void chrome.action.setBadgeBackgroundColor({ tabId, color: "#30779d" });
+      void chrome.action.setTitle({ tabId, title: "Memoar cannot open on this browser page. Open a social post and try again." });
+    });
+  });
   var pending = null;
   var capturing = false;
-  async function startCapture(allSlides) {
+  async function startCapture(allSlides, save = false, sourceTabId, expectedUrl) {
     if (capturing) throw new Error("A capture is already running. Wait a moment and try again.");
     capturing = true;
     try {
-      return await performCapture(allSlides);
+      return await performCapture(allSlides, save, sourceTabId, expectedUrl);
     } finally {
       capturing = false;
     }
   }
-  async function performCapture(allSlides) {
+  async function performCapture(allSlides, save, sourceTabId, expectedUrl) {
     if (pending) throw new Error("A capture is already running. Wait a moment and try again.");
-    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    const tab = sourceTabId === void 0 ? (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0] : await chrome.tabs.get(sourceTabId);
     if (!tab?.id || !tab.url) throw new Error("No supported active tab is available.");
+    if (expectedUrl && !samePost(tab.url, parsePostUrl(expectedUrl))) throw new Error("The post changed. Close and reopen Memoar before saving.");
     parsePostUrl(tab.url);
     const tabId = tab.id;
     const url = tab.url;
@@ -707,6 +1239,12 @@
       }
       const capture = await session.put(envelope);
       await rememberMediaTransfer(capture.id, capture.payload, tabId, url, nonce, capture.expiresAt, result.value.mediaAssets);
+      if (save) {
+        const id = `${payload.inspection.platform}:${payload.inspection.fields.postId.value}`;
+        const duplicate = Boolean(await savedLibrary.get(id));
+        const post = await saveToLibrary(capture.id, capture.payload);
+        return { postId: post.id, duplicate, aiStatus: post.aiStatus };
+      }
       return { captureId: capture.id, payload: capture.payload, expiresAt: capture.expiresAt };
     } finally {
       clearTimeout(timeout);
@@ -726,18 +1264,42 @@
       sendResponse({ ok: true });
       return false;
     }
-    if (sender.tab || sender.url !== chrome.runtime.getURL("popup.html")) return false;
-    const action = message.type === "START_CAPTURE" ? startCapture(message.allSlides === true) : message.type === "LAST_CAPTURE" ? session.peek().then((value) => value ? { captureId: value.id, payload: value.payload, expiresAt: value.expiresAt } : null) : null;
+    const fromPopover = Boolean(sender.tab?.id && sender.frameId === 0 && sender.url && /^https?:/.test(sender.url));
+    const fromPopup = !sender.tab && sender.url === chrome.runtime.getURL("popup.html");
+    if (!fromPopup && !fromPopover) return false;
+    if (fromPopover && !["SAVE_POST", "FIND_SAVED", "OPEN_LIBRARY"].includes(String(message.type))) return false;
+    const action = message.type === "OPEN_LIBRARY" ? Promise.resolve().then(async () => {
+      const post = typeof message.postId === "string" ? await savedLibrary.get(message.postId) : void 0;
+      const url = new URL(post ? `/app/saved/${encodeURIComponent(post.id)}` : "/setup", MEMOAR_ORIGIN);
+      url.searchParams.set("extensionId", chrome.runtime.id);
+      await chrome.tabs.create({ url: url.href });
+      return {};
+    }) : message.type === "SAVE_POST" ? Promise.resolve().then(() => {
+      if (fromPopover && typeof message.url !== "string") throw new Error("Reopen Memoar on the post you want to save.");
+      return startCapture(true, true, fromPopover ? sender.tab.id : void 0, fromPopover ? message.url : void 0);
+    }) : message.type === "FIND_SAVED" && typeof message.url === "string" ? Promise.resolve().then(async () => {
+      const parsed = parsePostUrl(fromPopover ? sender.url : message.url);
+      return { post: await savedLibrary.get(`${parsed.platform}:${parsed.postId}`) ?? null };
+    }) : message.type === "START_CAPTURE" ? startCapture(message.allSlides === true) : message.type === "LAST_CAPTURE" ? session.peek().then((value) => value ? { captureId: value.id, payload: value.payload, expiresAt: value.expiresAt } : null) : null;
     if (!action) return false;
-    void action.then((result) => sendResponse({ ok: true, result }), (error) => sendResponse({ ok: false, error: error instanceof Error ? error.message : "Capture failed." }));
+    void action.then((result) => {
+      try {
+        sendResponse({ ok: true, result });
+      } finally {
+        if (message.type === "SAVE_POST") resumeQueue();
+      }
+    }, (error) => sendResponse({ ok: false, error: error instanceof Error ? error.message : "Capture failed." }));
     return true;
   });
   chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
     if (!isMemoarSender(sender)) return false;
-    const action = isTakeRequest(message) ? session.take(message.captureId).then(async (payload) => ({ payload, mediaAssets: await claimMediaTransfer(message.captureId) })) : isMediaTransferRequest(message) ? transferMedia(message) : null;
+    const action = isLibraryRequest(message) ? message.type === "MEMOAR_TEST_NOTIFICATION" ? sendSavedPostNotification(true) : message.type === "MEMOAR_NOTIFICATION_STATUS" ? notificationStatus() : libraryMessage(message) : isTakeRequest(message) ? session.take(message.captureId).then(async (payload) => ({ payload, mediaAssets: await claimMediaTransfer(message.captureId) })) : isMediaTransferRequest(message) ? transferMedia(message) : null;
     if (!action) return false;
     void action.then(
-      (result) => sendResponse({ ok: true, ...result }),
+      (result) => {
+        sendResponse({ ok: true, ...result });
+        resumeQueue();
+      },
       (error) => sendResponse({ ok: false, error: error instanceof Error ? error.message : "Capture unavailable." })
     );
     return true;

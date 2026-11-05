@@ -4,6 +4,7 @@ import { CAPTURE_TTL_MS } from '../src/lib/capture/protocol';
 import { MAX_HANDOFF_MEDIA_BYTES, type CapturedAsset } from '../src/lib/capture/media-cache';
 
 type IsolatedCaptureWindow = typeof globalThis & {
+  __memoarPopover?: { host: HTMLElement };
   __memoarCaptureRequest?: { nonce: string; url: string; allSlides: boolean };
   __memoarCapturedMedia?: { nonce: string; expiresAt: number; assets: CapturedAsset[] };
 };

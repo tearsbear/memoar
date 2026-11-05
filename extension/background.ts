@@ -6,6 +6,12 @@ import { takeSnapshot } from './snapshot';
 import type { SnapshotCandidate } from './snapshot-region';
 import { samePost } from './adapters/dom';
 import { rememberMediaTransfer, claimMediaTransfer, transferMedia } from './media-transfer';
+import { saveToLibrary, savedLibrary, libraryMessage, runEnrichmentQueue } from './library';
+import { isLibraryRequest } from '../src/lib/library/protocol';
+import { MEMOAR_ORIGIN } from '../src/lib/capture/protocol';
+import { initializeNotifications, notificationStatus, sendSavedPostNotification } from './notifications';
+
+initializeNotifications();
 
 const session = createCaptureSession({
   get: async () => (await chrome.storage.session.get('pending')).pending as PendingCapture | undefined ?? null,
@@ -13,22 +19,42 @@ const session = createCaptureSession({
   clear: async () => { await chrome.storage.session.remove('pending'); },
 });
 void chrome.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
+void chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
 void session.peek();
 chrome.runtime.onStartup.addListener(() => { void session.peek(); });
+const resumeQueue = () => { void runEnrichmentQueue().catch(() => {}); };
+chrome.runtime.onStartup.addListener(resumeQueue);
+chrome.runtime.onInstalled.addListener(() => { void chrome.alarms.create('memoar-enrichment', { periodInMinutes: 1 }); resumeQueue(); });
+chrome.alarms.onAlarm.addListener(alarm => { if (alarm.name === 'memoar-enrichment') resumeQueue(); });
+void chrome.alarms.create('memoar-enrichment', { periodInMinutes: 1 });
+
+chrome.action.onClicked.addListener(tab => {
+  if (!tab.id) return;
+  const tabId = tab.id;
+  void chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, world: 'ISOLATED', files: ['popover.js'] }).then(() => {
+    void chrome.action.setBadgeText({ tabId, text: '' });
+    void chrome.action.setTitle({ tabId, title: 'Memoar' });
+  }).catch(() => {
+    void chrome.action.setBadgeText({ tabId, text: '!' });
+    void chrome.action.setBadgeBackgroundColor({ tabId, color: '#30779d' });
+    void chrome.action.setTitle({ tabId, title: 'Memoar cannot open on this browser page. Open a social post and try again.' });
+  });
+});
 
 let pending: { tabId: number; url: string; nonce: string; resolve: (value: unknown) => void; reject: (reason: Error) => void } | null = null;
 let capturing = false;
-async function startCapture(allSlides: boolean) {
+async function startCapture(allSlides: boolean, save = false, sourceTabId?: number, expectedUrl?: string) {
   if (capturing) throw new Error('A capture is already running. Wait a moment and try again.');
   capturing = true;
-  try { return await performCapture(allSlides); }
+  try { return await performCapture(allSlides, save, sourceTabId, expectedUrl); }
   finally { capturing = false; }
 }
 
-async function performCapture(allSlides: boolean) {
+async function performCapture(allSlides: boolean, save: boolean, sourceTabId?: number, expectedUrl?: string) {
   if (pending) throw new Error('A capture is already running. Wait a moment and try again.');
-  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  const tab = sourceTabId === undefined ? (await chrome.tabs.query({ active: true, lastFocusedWindow: true }))[0] : await chrome.tabs.get(sourceTabId);
   if (!tab?.id || !tab.url) throw new Error('No supported active tab is available.');
+  if (expectedUrl && !samePost(tab.url, parsePostUrl(expectedUrl))) throw new Error('The post changed. Close and reopen Memoar before saving.');
   parsePostUrl(tab.url);
   const tabId = tab.id;
   const url = tab.url;
@@ -61,6 +87,12 @@ async function performCapture(allSlides: boolean) {
     catch { envelope = normalizeCapture({ ...payload, snapshot: { status: 'unavailable', reason: 'Snapshot was omitted to keep the capture within its size limit.' } }); }
     const capture = await session.put(envelope);
     await rememberMediaTransfer(capture.id, capture.payload, tabId, url, nonce, capture.expiresAt, result.value.mediaAssets);
+    if (save) {
+      const id = `${payload.inspection.platform}:${payload.inspection.fields.postId.value}`;
+      const duplicate = Boolean(await savedLibrary.get(id));
+      const post = await saveToLibrary(capture.id, capture.payload);
+      return { postId: post.id, duplicate, aiStatus: post.aiStatus };
+    }
     return { captureId: capture.id, payload: capture.payload, expiresAt: capture.expiresAt };
   } finally { clearTimeout(timeout); pending = null; }
 }
@@ -76,22 +108,38 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
     sendResponse({ ok: true });
     return false;
   }
-  if (sender.tab || sender.url !== chrome.runtime.getURL('popup.html')) return false;
-  const action = message.type === 'START_CAPTURE' ? startCapture(message.allSlides === true)
+  const fromPopover = Boolean(sender.tab?.id && sender.frameId === 0 && sender.url && /^https?:/.test(sender.url));
+  const fromPopup = !sender.tab && sender.url === chrome.runtime.getURL('popup.html');
+  if (!fromPopup && !fromPopover) return false;
+  if (fromPopover && !['SAVE_POST', 'FIND_SAVED', 'OPEN_LIBRARY'].includes(String(message.type))) return false;
+  const action = message.type === 'OPEN_LIBRARY' ? Promise.resolve().then(async () => {
+      const post = typeof message.postId === 'string' ? await savedLibrary.get(message.postId) : undefined;
+      const url = new URL(post ? `/app/saved/${encodeURIComponent(post.id)}` : '/setup', MEMOAR_ORIGIN);
+      url.searchParams.set('extensionId', chrome.runtime.id);
+      await chrome.tabs.create({ url: url.href }); return {};
+    })
+    : message.type === 'SAVE_POST' ? Promise.resolve().then(() => {
+      if (fromPopover && typeof message.url !== 'string') throw new Error('Reopen Memoar on the post you want to save.');
+      return startCapture(true, true, fromPopover ? sender.tab!.id : undefined, fromPopover ? message.url as string : undefined);
+    })
+    : message.type === 'FIND_SAVED' && typeof message.url === 'string' ? Promise.resolve().then(async () => { const parsed = parsePostUrl(fromPopover ? sender.url : message.url); return { post: await savedLibrary.get(`${parsed.platform}:${parsed.postId}`) ?? null }; })
+    : message.type === 'START_CAPTURE' ? startCapture(message.allSlides === true)
     : message.type === 'LAST_CAPTURE' ? session.peek().then(value => value ? { captureId: value.id, payload: value.payload, expiresAt: value.expiresAt } : null)
     : null;
   if (!action) return false;
-  void action.then(result => sendResponse({ ok: true, result }), error => sendResponse({ ok: false, error: error instanceof Error ? error.message : 'Capture failed.' }));
+  void action.then(result => { try { sendResponse({ ok: true, result }); } finally { if (message.type === 'SAVE_POST') resumeQueue(); } }, error => sendResponse({ ok: false, error: error instanceof Error ? error.message : 'Capture failed.' }));
   return true;
 });
 
 chrome.runtime.onMessageExternal.addListener((message: unknown, sender, sendResponse) => {
   if (!isMemoarSender(sender)) return false;
-  const action = isTakeRequest(message) ? session.take(message.captureId).then(async payload => ({ payload, mediaAssets: await claimMediaTransfer(message.captureId) }))
+  const action = isLibraryRequest(message) ? message.type === 'MEMOAR_TEST_NOTIFICATION' ? sendSavedPostNotification(true)
+    : message.type === 'MEMOAR_NOTIFICATION_STATUS' ? notificationStatus() : libraryMessage(message)
+    : isTakeRequest(message) ? session.take(message.captureId).then(async payload => ({ payload, mediaAssets: await claimMediaTransfer(message.captureId) }))
     : isMediaTransferRequest(message) ? transferMedia(message) : null;
   if (!action) return false;
   void action.then(
-    result => sendResponse({ ok: true, ...result }),
+    result => { sendResponse({ ok: true, ...result }); resumeQueue(); },
     error => sendResponse({ ok: false, error: error instanceof Error ? error.message : 'Capture unavailable.' }),
   );
   return true;

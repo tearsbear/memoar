@@ -1,4 +1,66 @@
-# Memoar / Post Inspector
+# Memoar MVP
+
+Memoar now has a light-only local library, a save-first extension popup, Explore/search, saved details, related posts, collections, Home counts, and Settings. The earlier Post Inspector remains at `/dev/inspector` in development; it is hidden in production unless `MEMOAR_DEV_INSPECTOR=true`.
+
+## Current demo setup
+
+The toolbar action now toggles an in-page Memoar popover at the top-right, using an isolated Shadow DOM. Close it with ×, Escape, an outside click, or another toolbar click. It is injected only on an explicit toolbar click, with no added host permissions or automatic content scripts. Saving stays in the background worker if the panel is closed. The panel stays visible with a saving section. If it overlaps the media region, the display-only snapshot is skipped instead of hiding the panel. Browser-internal pages that prohibit injection show a toolbar `!` badge instead. After loading this update, reload the social tab once to clear any previously injected extension code.
+
+The updated source has **not** been built or run. At the user's request, no browser, server, build, tests, deployment, or live API requests were executed for this change. The existing `extension/dist` still needs rebuilding before it can run the new MVP.
+
+Run these commands yourself when ready:
+
+```sh
+npm run extension:build
+npm run dev
+```
+
+1. Load or reload `extension/dist` in Chrome's `chrome://extensions` page, with Developer mode enabled. The extension now requests alarms and localhost access for its persistent enrichment queue.
+2. Use **http://localhost:3000** in the same Chrome profile. The bridge and AI endpoint intentionally allow only this local origin. No production domain is configured.
+3. Open the Memoar popup and choose **Your library**. This supplies the real extension ID and imports the saved library. Alternatively, enter its 32-character ID on `/setup`. `NEXT_PUBLIC_MEMOAR_EXTENSION_ID` is optional and is an identifier, never an API credential.
+4. Muse Spark runs automatically after saving. Keep `MODEL_API_KEY` and `MEMOAR_ENRICHMENT_TOKEN` server-side in `.env.local`. After verifying the extension handshake, the dashboard automatically pairs it using a signed, expiring local access token. No AI toggle or access-code entry is shown. Restart your local server yourself after environment changes.
+5. Open an Instagram/Threads post and click **Add to Memoar**. Facebook retains its existing adapter and may be partial. Carousel capture reuses the existing all-slides behavior and may visibly advance slides.
+6. **Saved to Memoar** appears only after the local IndexedDB transaction completes. Open the saved item immediately; AI processing is independent of the popup. Updates import while the visible dashboard is open, approximately every 20 seconds, or using Resync.
+
+There is no new extension ZIP/download button yet because builds were explicitly prohibited. The installation page explains the unpacked flow and does not link to a missing artifact.
+
+## Save and enrichment behavior
+
+- `memoar-library` IndexedDB in the extension is authoritative. Stable IDs combine the normalized platform and parsed post ID. A repeat save returns the existing record; a capture-in-progress guard prevents duplicate capture races.
+- Captured records, preview snapshots, image blobs, and pending job state commit together before success is acknowledged. Muse Spark is triggered automatically after the save response. Previously saved posts are migrated into the same background queue. Automatic local pairing keeps the Meta API key and signing secret server-side.
+- Images are stored up to 12 MiB per post; omitted media remains explicit. Verified video bytes, when AI is enabled, are temporary job inputs for at most 24 hours and are removed after successful processing. Full videos are not permanent library media. The original link and display-only snapshot remain fallbacks.
+- Jobs persist `pending → processing → completed / failed_retryable / failed_terminal`, with up to three attempts and increasing retry delays. An alarms-based worker checks every minute and on extension startup/interaction. A five-minute persisted processing lease allows interrupted jobs to recover without overlapping another active attempt. Retry in detail resets the attempts. A third interrupted attempt becomes a visible failure instead of remaining stuck in Processing.
+- The local `/api/enrich` endpoint reuses the existing Muse Spark 1.3 prompt/schema, reasoning `low`, 8192 output-token limit, image-data path, and verified MP4 → Meta Files path. It authenticates a separate demo token, limits requests to localhost, bounds input size and duration, limits concurrent processing and hourly usage, and never returns `MODEL_API_KEY`.
+- A streamed response begins immediately and sends heartbeat messages; Chrome API activity keeps an active worker job alive. Durable jobs remain the recovery mechanism if Chrome still terminates the worker. Remote requests are not guaranteed exactly-once after an interrupted connection.
+- Meta Files uploads retain the established one-hour expiry fields and are deleted after processing where possible. There is no server media database. Captured content remains untrusted input to the existing prompt.
+- AI failure changes job metadata only; saved content remains intact. Results are schema-validated and stored with the model and input coverage note. Text-only analysis is explicitly distinguished from media analysis. Snapshots and oEmbed metadata never enter model inputs.
+
+## Library and privacy limits
+
+`memoar-dashboard-cache` is an idempotent website IndexedDB copy. Metadata is paginated, imported completely, and reconciled against a stable revision before replacing the cached list. Images transfer in bounded chunks and are cached on demand. A failed import retains the previous cache. Deletion removes the authoritative extension item before clearing this dashboard's copy; an AI completion cannot recreate a deleted item.
+
+Explore uses CSS masonry with natural media ratios, composable platform/category/status filters, sorting, and removable search chips. Search uses AND between chips and weighted lexical matching over captured text and stored enrichment; it does not make model calls. Related posts and collections use actual saved records and deterministic topic/brand matching. They can honestly be empty.
+
+Settings includes automatic extension notifications every 3 minutes, a Test notification button, automatic in-app reviews with a Daily default accelerated to three minutes for this demo, metadata export, dashboard-cache clearing, and confirmed deletion of all local saves. Notification clicks open the exact saved post with the extension ID for automatic connection. Scheduling survives worker restarts without resetting its timer; a persisted send timestamp suppresses duplicate automatic sends. Only real saved posts are used, rotating through the library, and no notification is sent for an empty library. Chrome must be running, and OS permissions/Focus mode/device sleep can affect delivery. Reload the extension and allow its added notifications permission. Full backup/restore, permanent video archives, cloud sync, and production enrichment hosting are not implemented. Metadata export contains captured text, previews, and enrichment, but not original image/video blobs; it is not a restorable full backup. Removing the extension or resetting browser storage can erase the library. An offline dashboard can show its already-imported cache, with connection status explicit.
+
+## Design and verification for this conversion
+
+The supplied Memoar PNG and exact supplied SVG paths preserve the identity. Memoar Blue anchors identity and search; the darker blue action shade keeps small white labels readable. White surfaces leave visual color to saved content. The left rail keeps navigation compact, the bottom search keeps retrieval in reach, and reserved page padding separates both from content. Masonry preserves varied source aspect ratios. Bricolage Grotesque adds the specified heading/wordmark voice; Inter keeps long captions readable. Both fonts are self-hosted from Google Fonts with their OFL licenses in `public/fonts`; Bootstrap platform marks retain their MIT license in `public/platforms`. Self-hosted fonts avoid this repository's custom-Babel incompatibility with `next/font`.
+
+Design dials: **ENERGY 1 / RHYTHM 2 / MOTION 1**. Only setup has the requested subtle animated blue blur, with a reduced-motion fallback.
+
+Static delivery review:
+
+- **Hard gate PASS (source review):** routes and actions are wired; loading/error/empty/partial states exist; no fabricated posts or metrics. Keyboard controls use semantic elements and visible focus styles. Runtime layout and contrast checks remain manual.
+- **Purpose gate PASS (source review):** image cards, navigation rail, floating search, limited blue setup motion, and supplied branding each serve the product direction above.
+- **Liveliness PASS (source review):** explicit design dials, Memoar identity, varied content-driven sections, and one main accent.
+- **Code gate PASS:** application and extension TypeScript checks, CSS parsing, manifest JSON parsing, font header validation, and `git diff --check`. Browser click-through, runtime layout, service-worker recovery, model responses, tests, and build compatibility remain **unverified by request**.
+
+The prototype documentation below records earlier behavior and findings; it is historical where it conflicts with the MVP section above.
+
+---
+
+# Earlier Post Inspector prototype
 
 A feasibility prototype for Instagram, Threads, and Facebook, with URL-only inspection and optional user-triggered Chrome DOM capture. The existing Next.js page reports identity, display availability, field provenance, and AI payload blockers. No sample results are loaded into the page.
 

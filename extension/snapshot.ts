@@ -21,6 +21,9 @@ export async function takeSnapshot(tabId: number, windowId: number, url: string,
       if (active?.id !== tabId || active.windowId !== windowId || active.url !== url) throw new Error('Source tab changed.');
       const [probe] = await chrome.scripting.executeScript({ target: { tabId, frameIds: [0] }, world: 'ISOLATED', args: [candidate, url],
         func: (target: SnapshotCandidate, expectedUrl: string) => {
+          const panel = (globalThis as typeof globalThis & { __memoarPopover?: { host: HTMLElement } }).__memoarPopover?.host.getBoundingClientRect();
+          const region = target.region;
+          if (panel && panel.left < region.x + region.width && panel.right > region.x && panel.top < region.y + region.height && panel.bottom > region.y) return false;
           const node = document.querySelectorAll<HTMLImageElement | HTMLVideoElement>('img, video')[target.mediaIndex];
           if (!node || location.href !== expectedUrl || (node.currentSrc || node.getAttribute('src') || '') !== target.mediaSource) return false;
           const r = node.getBoundingClientRect(), b = target.region;

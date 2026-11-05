@@ -5,8 +5,8 @@
 
 @layer memoar {
   :root {
-    color-scheme: dark;
-    background: #212121;
+    color-scheme: light;
+    background: #f6f8fa;
   }
 
   body {

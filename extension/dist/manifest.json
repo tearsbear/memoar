@@ -1,11 +1,13 @@
 {
   "manifest_version": 3,
-  "name": "Memoar Post Capture",
-  "version": "0.1.0",
-  "description": "Capture visible data from a post you explicitly choose, then inspect it in local Memoar.",
+  "name": "Memoar",
+  "version": "0.2.0",
+  "description": "Save social posts to your personal, searchable library in this browser.",
   "minimum_chrome_version": "112",
-  "permissions": ["activeTab", "scripting", "storage"],
-  "action": { "default_popup": "popup.html", "default_title": "Memoar Post Capture" },
+  "permissions": ["activeTab", "scripting", "storage", "alarms", "notifications"],
+  "host_permissions": ["http://localhost/*"],
+  "icons": { "128": "memoar-icon.png" },
+  "action": { "default_title": "Memoar", "default_icon": "memoar-icon.png" },
   "background": { "service_worker": "background.js" },
   "externally_connectable": { "matches": ["http://localhost/*"] },
   "content_security_policy": { "extension_pages": "script-src 'self'; object-src 'none'" }

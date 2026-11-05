@@ -1,19 +1,13 @@
 <!doctype html>
 <html lang="en">
-  <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Memoar Post Capture</title><link rel="stylesheet" href="popup.css"></head>
-  <body>
-    <main>
-      <header><p class="brand">Memoar</p><h1>Capture current post</h1></header>
-      <p id="platform">Checking the active tab…</p>
-      <p id="page-url" class="url"></p>
-      <p class="note">After you click, Memoar reads the visible post and captures a cropped snapshot of its visible media when possible. Use content you own or are authorized to test.</p>
-      <button id="capture" disabled>Capture current post</button>
-      <label class="note"><input id="all-slides" type="checkbox"> Capture all carousel slides (up to 20). Moves visible slides and leaves the last captured slide selected; interaction stops navigation.</label>
-      <p id="status" role="status" aria-live="polite"></p>
-      <div class="actions"><button id="open" class="secondary" disabled>Open in Memoar</button><button id="copy" class="secondary" disabled>Copy captured JSON</button></div>
-      <textarea id="manual-copy" aria-label="Captured JSON for manual copy" readonly hidden></textarea>
-      <p class="note">Image resources are checked without credentials where CORS permits. Video references are not verified files. AI processing permission remains unverified. Pending capture expires after five minutes.</p>
-    </main>
-    <script src="popup.js"></script>
-  </body>
+  <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Memoar</title><link rel="stylesheet" href="popup.css"></head>
+  <body><main>
+    <header><img src="memoar-icon.png" width="38" height="38" alt=""><span class="brand">memoar</span><button id="library" class="text-button">Your library ↗</button></header>
+    <div class="post-context"><p class="platform-heading"><img id="platform-icon" width="16" height="16" alt="" hidden><span id="platform">Checking this tab…</span></p><p id="page-url" class="url"></p></div>
+    <p id="status" role="status" aria-live="polite"></p>
+    <section id="saving-state" class="saving-state" role="status" hidden><span class="saving-spinner" aria-hidden="true"></span><div><strong>Saving your post…</strong><p>Keep the post open. Your save comes first; organizing runs in the background.</p></div></section>
+    <button id="capture" class="primary" disabled>Add to Memoar</button>
+    <button id="open" class="primary" hidden>Open in Memoar</button>
+    <p class="note">Saved on this browser profile. Muse Spark organizes your saved text and supported media in the background. Only save content you’re authorized to process.</p>
+  </main><script src="popup.js"></script></body>
 </html>

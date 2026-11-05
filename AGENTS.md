@@ -1,15 +1,15 @@
-# Memoar / Post Inspector
+# Memoar MVP
 
-- Keep changes within the approved inspection prototype and user-triggered Chrome extension capture. One-time visible DOM reads and short-lived chrome.storage.session handoff are authorized. No server scraping, private APIs, OAuth, permanent storage, uploads, AI inference, or deployment.
-- Do not start the app, run a Next.js build/server, use a browser, or perform live post/API tests. The user checks those manually. Typecheck, isolated unit tests, and building the extension are authorized.
-- Preserve the fixed dark appearance. Use actual Astryx components, neutral theme tokens, and small StyleX `xstyle` adjustments. Native semantic markup and scoped layout CSS are used for the inspection report.
+- The user approved the local-first MVP on 2026-11-05: extension IndexedDB library, website cache, user-triggered capture, and automatic Muse Spark enrichment (approved by the user; no AI toggle) through a server-only API. Preserve the proven capture adapters, prompt, export paths, and media validation. No server scraping, private APIs, OAuth, cloud database, or deployment.
+- Do not run a browser, server, build (including extension build), tests, or live post/API checks. The user handles these manually. Static syntax checks and `npm run typecheck` are authorized.
+- Use the approved light-only Memoar identity, Memoar Blue, Bricolage Grotesque / Inter, floating navigation rail, and bottom search. Keep actual Astryx components and scoped layout CSS; adapt the generic DESIGN.md to the Memoar implementation plan.
 - oEmbed is display-only. Never promote its author/text/media metadata into extracted fields or AI inputs. Keep display HTML outside exported inspection JSON.
 - Missing content, permissions, and unverified rendering must remain explicit. Do not infer privacy, deletion, authors, or media type from URL shapes or generic errors.
-- Run `npm run typecheck` and `npm test` for relevant changes. Tests must inject provider transports; live fetch is blocked by the test setup.
+- Run `npm run typecheck` for relevant changes. Do not run tests in this task. If later authorized, tests must inject provider transports; live fetch is blocked by the test setup.
 
 ## Astryx
 
-The project uses CLI-generated `src/astryx-themes.ts` and published production CSS. Use `Theme` with `mode="dark"` and preserve the initial HTML theme attributes.
+The project uses CLI-generated `src/astryx-themes.ts` and published production CSS. Use `Theme` with `mode="light"` and preserve matching initial HTML theme attributes.
 
 Read actual imports and props before using a component:
 
@@ -19,4 +19,4 @@ npm run astryx -- docs tokens
 npm run astryx -- docs theme
 ```
 
-Use the local scoped CLI through the npm script. Do not install it globally. Preserve the user-defined single-page layout rather than substituting a generic dashboard template.
+Use the local scoped CLI through the npm script. Do not install it globally. Preserve the requested Memoar layouts rather than substituting a generic dashboard template.
