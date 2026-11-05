@@ -5,10 +5,10 @@
   "description": "Save social posts to your personal, searchable library in this browser.",
   "minimum_chrome_version": "112",
   "permissions": ["activeTab", "scripting", "storage", "alarms", "notifications"],
-  "host_permissions": ["https://memoar.vercel.app/*", "http://localhost/*"],
+  "host_permissions": ["https://memoar-theta.vercel.app/*", "http://localhost/*"],
   "icons": { "128": "memoar-icon.png" },
   "action": { "default_title": "Memoar", "default_icon": "memoar-icon.png" },
   "background": { "service_worker": "background.js" },
-  "externally_connectable": { "matches": ["https://memoar.vercel.app/*", "http://localhost/*"] },
+  "externally_connectable": { "matches": ["https://memoar-theta.vercel.app/*", "http://localhost/*"] },
   "content_security_policy": { "extension_pages": "script-src 'self'; object-src 'none'" }
 }

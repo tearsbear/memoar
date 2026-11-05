@@ -84,10 +84,10 @@
   }
 
   // src/lib/capture/protocol.ts
-  var MEMOAR_ORIGIN = true ? "https://memoar.vercel.app" : "https://memoar.vercel.app";
+  var MEMOAR_ORIGIN = true ? "https://memoar-theta.vercel.app" : "https://memoar-theta.vercel.app";
   var LOCAL_MEMOAR_ORIGIN = "http://localhost:3000";
   function isMemoarOrigin(origin) {
-    return origin === "https://memoar.vercel.app" || origin === LOCAL_MEMOAR_ORIGIN;
+    return origin === "https://memoar-theta.vercel.app" || origin === LOCAL_MEMOAR_ORIGIN;
   }
   var CAPTURE_TTL_MS = 5 * 60 * 1e3;
   var MAX_CAPTURE_BYTES = 256 * 1024;

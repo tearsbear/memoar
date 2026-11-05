@@ -7,8 +7,8 @@ import path from 'node:path';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const output = path.join(root, 'extension/dist');
-const origin = process.env.MEMOAR_EXTENSION_ORIGIN || 'https://memoar.vercel.app';
-if (!['https://memoar.vercel.app', 'http://localhost:3000'].includes(origin)) throw new Error('Unsupported Memoar extension origin.');
+const origin = process.env.MEMOAR_EXTENSION_ORIGIN || 'https://memoar-theta.vercel.app';
+if (!['https://memoar-theta.vercel.app', 'http://localhost:3000'].includes(origin)) throw new Error('Unsupported Memoar extension origin.');
 await mkdir(output, { recursive: true });
 await build({
   absWorkingDir: root,
@@ -22,7 +22,7 @@ for (const name of ['manifest.json', 'popup.html', 'popup.css', 'memoar-icon.png
 await mkdir(path.join(output, 'platforms'), { recursive: true });
 for (const name of ['instagram.svg', 'threads.svg', 'facebook.svg', 'LICENSE']) await copyFile(path.join(root, 'public/platforms', name), path.join(output, 'platforms', name));
 const manifest = JSON.parse(await readFile(path.join(output, 'manifest.json'), 'utf8'));
-const expectedHosts = JSON.stringify(['https://memoar.vercel.app/*', 'http://localhost/*']);
+const expectedHosts = JSON.stringify(['https://memoar-theta.vercel.app/*', 'http://localhost/*']);
 if (manifest.manifest_version !== 3 || manifest.permissions.join(',') !== 'activeTab,scripting,storage,alarms,notifications' || JSON.stringify(manifest.host_permissions) !== expectedHosts || JSON.stringify(manifest.externally_connectable?.matches) !== expectedHosts || manifest.content_scripts) {
   throw new Error('Unexpected extension permissions or automatic content scripts.');
 }
