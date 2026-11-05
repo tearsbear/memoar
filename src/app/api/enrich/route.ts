@@ -2,24 +2,28 @@ import 'server-only';
 import { createHash } from 'node:crypto';
 import { validEnrichmentAccess } from '@/lib/library/enrichment-auth';
 import { normalizeCapture } from '@/lib/capture/normalize';
+import { isMemoarOrigin, LOCAL_MEMOAR_ORIGIN } from '@/lib/capture/protocol';
 import { enrichmentPrompt, enrichmentSchema, cleanVisibleText } from '@/lib/inspection/enrichment';
 import { parseEnrichment } from '@/lib/library/enrichment';
 import { modelExport } from '@/lib/inspection/model-export';
 
 export const runtime = 'nodejs';
+export const maxDuration = 240;
 const json = (body: unknown, status = 200) => Response.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
 let windowStart = 0, calls = 0, active = false;
 export async function POST(request: Request) {
   const expected = process.env.MEMOAR_ENRICHMENT_TOKEN?.trim();
   const actual = request.headers.get('authorization')?.replace(/^Bearer /, '') ?? '';
   if (!expected || expected.length < 24 || !validEnrichmentAccess(actual, expected)) return json({ error: 'Open Memoar to reconnect background organizing.' }, 401);
-  if (new URL(request.url).origin !== 'http://localhost:3000' || request.headers.get('host') !== 'localhost:3000') return json({ error: 'AI processing is currently available on the local demo only.' }, 403);
+  const url = new URL(request.url);
+  if (!isMemoarOrigin(url.origin) || request.headers.get('host') !== url.host) return json({ error: 'Use the Memoar website for AI processing.' }, 403);
+  const limit = url.origin === LOCAL_MEMOAR_ORIGIN ? 53 * 1024 * 1024 : 4 * 1024 * 1024;
   const key = process.env.MODEL_API_KEY?.trim();
-  if (!key) return json({ error: 'Local AI processing is not configured yet.' }, 503);
-  if (Number(request.headers.get('content-length') ?? Infinity) > 53 * 1024 * 1024) return json({ error: 'Post media exceeds the local processing limit.' }, 413);
+  if (!key) return json({ error: 'AI processing is not configured yet.' }, 503);
+  if (Number(request.headers.get('content-length') ?? Infinity) > limit) return json({ error: 'Post media exceeds this server’s processing limit. Your post remains saved.' }, 413);
   if (active) return json({ error: 'Another post is being organized. Retry shortly.' }, 429);
   if (Date.now() - windowStart > 3600000) { windowStart = Date.now(); calls = 0; }
-  if (calls >= 20) return json({ error: 'The local hourly AI limit has been reached. Try later.' }, 429);
+  if (calls >= 20) return json({ error: 'The hourly AI limit for this server instance has been reached. Try later.' }, 429);
   calls++; active = true;
   const abort = new AbortController();
   const stream = new ReadableStream<Uint8Array>({
@@ -28,7 +32,7 @@ export async function POST(request: Request) {
       const send = (value: unknown) => { if (!abort.signal.aborted) controller.enqueue(encoder.encode(JSON.stringify(value) + '\n')); };
       send({ type: 'heartbeat' });
       const heartbeat = setInterval(() => send({ type: 'heartbeat' }), 15000);
-      void processCapture(request, key, abort.signal).then(async response => {
+      void processCapture(request, key, abort.signal, limit).then(async response => {
         send({ type: 'result', ok: response.ok, ...await response.json() });
       }).catch(() => send({ type: 'result', ok: false, error: 'AI processing was interrupted. Your post remains saved.' })).finally(() => {
         clearInterval(heartbeat); active = false;
@@ -40,14 +44,14 @@ export async function POST(request: Request) {
   return new Response(stream, { headers: { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' } });
 }
 
-async function processCapture(request: Request, key: string, cancelled: AbortSignal): Promise<Response> {
+async function processCapture(request: Request, key: string, cancelled: AbortSignal, limit: number): Promise<Response> {
   const uploaded: string[] = [];
   const deadline = AbortSignal.any([request.signal, cancelled, AbortSignal.timeout(210000)]);
   try {
     const reader = request.body?.getReader();
     if (!reader) return json({ error: 'No captured post was supplied.' }, 400);
     const chunks: Uint8Array<ArrayBuffer>[] = []; let size = 0;
-    while (true) { const result = await reader.read(); if (result.done) break; size += result.value.byteLength; if (size > 53 * 1024 * 1024) { await reader.cancel(); return json({ error: 'Post media exceeds the local processing limit.' }, 413); } chunks.push(result.value); }
+    while (true) { const result = await reader.read(); if (result.done) break; size += result.value.byteLength; if (size > limit) { await reader.cancel(); return json({ error: 'Post media exceeds this server’s processing limit. Your post remains saved.' }, 413); } chunks.push(result.value); }
     const form = await new Response(new Blob(chunks), { headers: { 'Content-Type': request.headers.get('content-type') ?? '' } }).formData();
     const raw = form.get('capture');
     if (typeof raw !== 'string') return json({ error: 'No captured post was supplied.' }, 400);

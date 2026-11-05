@@ -1,4 +1,9 @@
-export const MEMOAR_ORIGIN = 'http://localhost:3000';
+declare const MEMOAR_EXTENSION_ORIGIN: string | undefined;
+export const MEMOAR_ORIGIN = typeof MEMOAR_EXTENSION_ORIGIN === 'string' ? MEMOAR_EXTENSION_ORIGIN : 'https://memoar.vercel.app';
+export const LOCAL_MEMOAR_ORIGIN = 'http://localhost:3000';
+export function isMemoarOrigin(origin: string): boolean {
+  return origin === 'https://memoar.vercel.app' || origin === LOCAL_MEMOAR_ORIGIN;
+}
 export const CAPTURE_TTL_MS = 5 * 60 * 1000;
 export const MAX_CAPTURE_BYTES = 256 * 1024;
 export const MAX_TEXT_CHARS = 32000;
@@ -17,7 +22,8 @@ export function captureBytes(value: unknown): number {
 export function isMemoarSender(sender: { id?: string; url?: string; origin?: string; frameId?: number }): boolean {
   if (sender.id || !sender.url || sender.frameId !== 0) return false;
   try {
-    return new URL(sender.url).origin === MEMOAR_ORIGIN && (!sender.origin || sender.origin === MEMOAR_ORIGIN);
+    const origin = new URL(sender.url).origin;
+    return isMemoarOrigin(origin) && (!sender.origin || sender.origin === origin);
   } catch { return false; }
 }
 

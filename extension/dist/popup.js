@@ -84,7 +84,7 @@
   }
 
   // src/lib/capture/protocol.ts
-  var MEMOAR_ORIGIN = "http://localhost:3000";
+  var MEMOAR_ORIGIN = true ? "https://memoar.vercel.app" : "https://memoar.vercel.app";
   var CAPTURE_TTL_MS = 5 * 60 * 1e3;
   var MAX_CAPTURE_BYTES = 256 * 1024;
 

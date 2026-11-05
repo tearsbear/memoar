@@ -16,6 +16,6 @@ export function LibraryConnection() {
     </form>
     {library.error && <p role="alert" className="memoar-error">{library.error}</p>}
     {library.busy && <p role="status">{library.progress}</p>}
-    <a href="/getting-started#install">View the install guide</a>
+    <div className="action-row"><a className="memoar-link-button" href="/api/extension/download">Download extension ZIP</a><a href="/getting-started#install">View the install guide</a></div>
   </div>;
 }

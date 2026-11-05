@@ -79,6 +79,7 @@ export async function runEnrichmentQueue() {
       for (const asset of await savedLibrary.assets(post.id)) form.append(`media-${asset.itemIndex}`, asset.blob, `slide-${asset.itemIndex}.${asset.mimeType === 'video/mp4' ? 'mp4' : 'image'}`);
       const response = await fetch(`${MEMOAR_ORIGIN}/api/enrich`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form, redirect: 'error', signal: AbortSignal.timeout(240000) });
       if (!response.ok) {
+        if (response.status === 413) throw new Error('This post is too large for the AI server. Your post remains saved; hosted processing supports requests up to 4 MiB.');
         const failure = await response.json();
         throw new Error(typeof failure.error === 'string' ? failure.error : 'AI processing is temporarily unavailable.');
       }

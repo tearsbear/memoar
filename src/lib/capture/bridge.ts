@@ -1,5 +1,5 @@
 import { normalizeCapture, type CaptureEnvelope } from './normalize';
-import { CAPTURE_ID, EXTENSION_ID, isRecord, MEMOAR_ORIGIN, type MediaTransferRequest } from './protocol';
+import { CAPTURE_ID, EXTENSION_ID, isRecord, isMemoarOrigin, MEMOAR_ORIGIN, type MediaTransferRequest } from './protocol';
 import { attachCapturedAssets, MEDIA_CHUNK_BYTES, parseCapturedAssetInfo, type CapturedAsset } from './media-cache';
 
 type BridgeRequest = { type: 'TAKE_CAPTURE'; captureId: string } | MediaTransferRequest;
@@ -69,7 +69,7 @@ export function createCaptureImporter() {
 
 export function captureLinkParameters(url: URL): { captureId: string; extensionId: string } | null {
   if (!url.searchParams.has('captureId') && !url.searchParams.has('extensionId')) return null;
-  if (url.origin !== MEMOAR_ORIGIN) throw new Error(`Open the inspector at ${MEMOAR_ORIGIN} for extension handoff.`);
+  if (!isMemoarOrigin(url.origin)) throw new Error(`Open the inspector at ${MEMOAR_ORIGIN} for extension handoff.`);
   const captureId = url.searchParams.get('captureId') ?? '';
   const extensionId = url.searchParams.get('extensionId') ?? '';
   if (url.searchParams.getAll('captureId').length !== 1 || url.searchParams.getAll('extensionId').length !== 1 || !CAPTURE_ID.test(captureId) || !EXTENSION_ID.test(extensionId)) {

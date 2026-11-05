@@ -84,7 +84,11 @@
   }
 
   // src/lib/capture/protocol.ts
-  var MEMOAR_ORIGIN = "http://localhost:3000";
+  var MEMOAR_ORIGIN = true ? "https://memoar.vercel.app" : "https://memoar.vercel.app";
+  var LOCAL_MEMOAR_ORIGIN = "http://localhost:3000";
+  function isMemoarOrigin(origin) {
+    return origin === "https://memoar.vercel.app" || origin === LOCAL_MEMOAR_ORIGIN;
+  }
   var CAPTURE_TTL_MS = 5 * 60 * 1e3;
   var MAX_CAPTURE_BYTES = 256 * 1024;
   var MAX_TEXT_CHARS = 32e3;
@@ -99,7 +103,8 @@
   function isMemoarSender(sender) {
     if (sender.id || !sender.url || sender.frameId !== 0) return false;
     try {
-      return new URL(sender.url).origin === MEMOAR_ORIGIN && (!sender.origin || sender.origin === MEMOAR_ORIGIN);
+      const origin = new URL(sender.url).origin;
+      return isMemoarOrigin(origin) && (!sender.origin || sender.origin === origin);
     } catch {
       return false;
     }
@@ -953,6 +958,7 @@
         for (const asset of await savedLibrary.assets(post.id)) form.append(`media-${asset.itemIndex}`, asset.blob, `slide-${asset.itemIndex}.${asset.mimeType === "video/mp4" ? "mp4" : "image"}`);
         const response = await fetch(`${MEMOAR_ORIGIN}/api/enrich`, { method: "POST", headers: { Authorization: `Bearer ${token}` }, body: form, redirect: "error", signal: AbortSignal.timeout(24e4) });
         if (!response.ok) {
+          if (response.status === 413) throw new Error("This post is too large for the AI server. Your post remains saved; hosted processing supports requests up to 4 MiB.");
           const failure = await response.json();
           throw new Error(typeof failure.error === "string" ? failure.error : "AI processing is temporarily unavailable.");
         }
