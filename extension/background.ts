@@ -100,9 +100,13 @@ async function performCapture(allSlides: boolean, save: boolean, sourceTabId?: n
 chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
   if (!isRecord(message) || sender.id !== chrome.runtime.id) return false;
   if ((message.type === 'CAPTURE_RESULT' || message.type === 'CAPTURE_ERROR') && pending && message.nonce === pending.nonce
-    && sender.tab?.id === pending.tabId && sender.frameId === 0 && sender.url && samePost(sender.url, parsePostUrl(pending.url))) {
+    && sender.tab?.id === pending.tabId && sender.frameId === 0) {
     if (message.type === 'CAPTURE_RESULT') {
-      try { pending.resolve({ payload: normalizeCapture(message.payload), candidate: message.candidate ?? null, mediaAssets: message.mediaAssets }); }
+      try {
+        const payload = normalizeCapture(message.payload);
+        if (!samePost(payload.inspection.normalizedUrl, parsePostUrl(pending.url))) throw new Error('The capture belongs to a different post. Capture discarded.');
+        pending.resolve({ payload, candidate: message.candidate ?? null, mediaAssets: message.mediaAssets });
+      }
       catch (error) { pending.reject(error instanceof Error ? error : new Error('Invalid capture.')); }
     } else pending.reject(new Error(typeof message.message === 'string' ? message.message.slice(0, 1000) : 'Capture failed.'));
     sendResponse({ ok: true });
@@ -122,7 +126,20 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
       if (fromPopover && typeof message.url !== 'string') throw new Error('Reopen Memoar on the post you want to save.');
       return startCapture(true, true, fromPopover ? sender.tab!.id : undefined, fromPopover ? message.url as string : undefined);
     })
-    : message.type === 'FIND_SAVED' && typeof message.url === 'string' ? Promise.resolve().then(async () => { const parsed = parsePostUrl(fromPopover ? sender.url : message.url); return { post: await savedLibrary.get(`${parsed.platform}:${parsed.postId}`) ?? null }; })
+    : message.type === 'FIND_SAVED' && typeof message.url === 'string' ? Promise.resolve().then(async () => {
+      const parsed = parsePostUrl(message.url);
+      const tabId = fromPopover ? sender.tab!.id : undefined;
+      if (tabId !== undefined) {
+        const tab = await chrome.tabs.get(tabId);
+        if (!tab.url || !samePost(tab.url, parsed)) throw new Error('The post changed. Reopen Memoar on the current post.');
+      }
+      const post = await savedLibrary.get(`${parsed.platform}:${parsed.postId}`) ?? null;
+      if (tabId !== undefined) {
+        const tab = await chrome.tabs.get(tabId);
+        if (!tab.url || !samePost(tab.url, parsed)) throw new Error('The post changed. Reopen Memoar on the current post.');
+      }
+      return { post };
+    })
     : message.type === 'START_CAPTURE' ? startCapture(message.allSlides === true)
     : message.type === 'LAST_CAPTURE' ? session.peek().then(value => value ? { captureId: value.id, payload: value.payload, expiresAt: value.expiresAt } : null)
     : null;

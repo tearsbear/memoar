@@ -7835,10 +7835,12 @@ ${newlined}
   }
   chrome.runtime.onMessage.addListener((message2, sender, sendResponse) => {
     if (!isRecord(message2) || sender.id !== chrome.runtime.id) return false;
-    if ((message2.type === "CAPTURE_RESULT" || message2.type === "CAPTURE_ERROR") && pending && message2.nonce === pending.nonce && sender.tab?.id === pending.tabId && sender.frameId === 0 && sender.url && samePost(sender.url, parsePostUrl(pending.url))) {
+    if ((message2.type === "CAPTURE_RESULT" || message2.type === "CAPTURE_ERROR") && pending && message2.nonce === pending.nonce && sender.tab?.id === pending.tabId && sender.frameId === 0) {
       if (message2.type === "CAPTURE_RESULT") {
         try {
-          pending.resolve({ payload: normalizeCapture(message2.payload), candidate: message2.candidate ?? null, mediaAssets: message2.mediaAssets });
+          const payload = normalizeCapture(message2.payload);
+          if (!samePost(payload.inspection.normalizedUrl, parsePostUrl(pending.url))) throw new Error("The capture belongs to a different post. Capture discarded.");
+          pending.resolve({ payload, candidate: message2.candidate ?? null, mediaAssets: message2.mediaAssets });
         } catch (error) {
           pending.reject(error instanceof Error ? error : new Error("Invalid capture."));
         }
@@ -7860,8 +7862,18 @@ ${newlined}
       if (fromPopover && typeof message2.url !== "string") throw new Error("Reopen Memoar on the post you want to save.");
       return startCapture(true, true, fromPopover ? sender.tab.id : void 0, fromPopover ? message2.url : void 0);
     }) : message2.type === "FIND_SAVED" && typeof message2.url === "string" ? Promise.resolve().then(async () => {
-      const parsed = parsePostUrl(fromPopover ? sender.url : message2.url);
-      return { post: await savedLibrary.get(`${parsed.platform}:${parsed.postId}`) ?? null };
+      const parsed = parsePostUrl(message2.url);
+      const tabId = fromPopover ? sender.tab.id : void 0;
+      if (tabId !== void 0) {
+        const tab = await chrome.tabs.get(tabId);
+        if (!tab.url || !samePost(tab.url, parsed)) throw new Error("The post changed. Reopen Memoar on the current post.");
+      }
+      const post = await savedLibrary.get(`${parsed.platform}:${parsed.postId}`) ?? null;
+      if (tabId !== void 0) {
+        const tab = await chrome.tabs.get(tabId);
+        if (!tab.url || !samePost(tab.url, parsed)) throw new Error("The post changed. Reopen Memoar on the current post.");
+      }
+      return { post };
     }) : message2.type === "START_CAPTURE" ? startCapture(message2.allSlides === true) : message2.type === "LAST_CAPTURE" ? session.peek().then((value) => value ? { captureId: value.id, payload: value.payload, expiresAt: value.expiresAt } : null) : null;
     if (!action) return false;
     void action.then((result) => {

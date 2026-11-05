@@ -24,10 +24,13 @@ export function mountPopup(root: ParentNode, pageUrl: string, icons: Record<stri
     const url = root.querySelector<HTMLElement>('#page-url')!;
     url.textContent = parsed.normalizedUrl; url.title = parsed.normalizedUrl;
     status.textContent = parsed.platform === 'facebook' ? 'Facebook capture may be partial. Only available post content is saved.' : '';
-    save.disabled = false;
     const response = await chrome.runtime.sendMessage({ type: 'FIND_SAVED', url: parsed.normalizedUrl });
     if (!response?.ok) throw new Error(response?.error || 'Could not check your saved posts. Reopen Memoar to retry.');
-    if (response.result?.post) saved(response.result.post.id, true);
+    if (response.result?.post) {
+      if (response.result.post.id !== `${parsed.platform}:${parsed.postId}`) throw new Error('The saved result belongs to a different post. Reopen Memoar to check this post again.');
+      saved(response.result.post.id, true);
+    }
+    save.disabled = false;
   }
   save.addEventListener('click', () => {
     save.disabled = true; save.textContent = 'Saving your post…';

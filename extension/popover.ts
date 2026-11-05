@@ -5,6 +5,8 @@ import instagram from '../public/platforms/instagram.svg';
 import threads from '../public/platforms/threads.svg';
 import facebook from '../public/platforms/facebook.svg';
 import { mountPopup } from './popup-ui';
+import { parsePostUrl } from '../src/lib/inspection/parse-url';
+import { samePost } from './adapters/dom';
 
 type PopoverState = { host: HTMLDivElement; close: () => void };
 const scope = globalThis as typeof globalThis & { __memoarPopover?: PopoverState };
@@ -12,6 +14,8 @@ const scope = globalThis as typeof globalThis & { __memoarPopover?: PopoverState
 if (scope.__memoarPopover) scope.__memoarPopover.close();
 else {
   const previousFocus = document.activeElement;
+  const pageUrl = location.href;
+  let navigationCheck: ReturnType<typeof setInterval> | undefined;
   const host = document.createElement('div');
   host.style.cssText = 'all:initial!important;font:14px/1.5 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;color:#12171c!important;color-scheme:light!important;position:fixed!important;inset:16px 16px auto auto!important;width:min(360px,calc(100vw - 32px))!important;z-index:2147483647!important;';
   const shadow = host.attachShadow({ mode: 'closed' });
@@ -34,6 +38,7 @@ else {
   panel.prepend(close); shadow.append(style, panel);
   document.documentElement.append(host);
   const state: PopoverState = { host, close: () => {
+    clearInterval(navigationCheck);
     document.removeEventListener('keydown', onKey, true);
     document.removeEventListener('pointerdown', onOutside, true);
     host.remove(); delete scope.__memoarPopover;
@@ -48,6 +53,11 @@ else {
   document.addEventListener('pointerdown', onOutside, true);
   scope.__memoarPopover = state;
   const data = (svg: string) => 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg);
-  mountPopup(shadow, location.href, { instagram: data(instagram), threads: data(threads), facebook: data(facebook) });
+  mountPopup(shadow, pageUrl, { instagram: data(instagram), threads: data(threads), facebook: data(facebook) });
+  navigationCheck = setInterval(() => {
+    if (location.href === pageUrl) return;
+    try { if (samePost(location.href, parsePostUrl(pageUrl))) return; } catch { /* Close when the tab leaves the supported post. */ }
+    state.close();
+  }, 300);
   close.focus({ preventScroll: true });
 }

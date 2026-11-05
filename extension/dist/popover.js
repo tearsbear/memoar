@@ -131,10 +131,13 @@
       url.textContent = parsed.normalizedUrl;
       url.title = parsed.normalizedUrl;
       status.textContent = parsed.platform === "facebook" ? "Facebook capture may be partial. Only available post content is saved." : "";
-      save.disabled = false;
       const response = await chrome.runtime.sendMessage({ type: "FIND_SAVED", url: parsed.normalizedUrl });
       if (!response?.ok) throw new Error(response?.error || "Could not check your saved posts. Reopen Memoar to retry.");
-      if (response.result?.post) saved(response.result.post.id, true);
+      if (response.result?.post) {
+        if (response.result.post.id !== `${parsed.platform}:${parsed.postId}`) throw new Error("The saved result belongs to a different post. Reopen Memoar to check this post again.");
+        saved(response.result.post.id, true);
+      }
+      save.disabled = false;
     }
     save.addEventListener("click", () => {
       save.disabled = true;
@@ -169,6 +172,20 @@
     });
   }
 
+  // extension/adapters/dom.ts
+  function samePost(url, expected) {
+    try {
+      const resolved = new URL(url, expected.normalizedUrl);
+      if (expected.platform === "instagram" && /^\/[A-Za-z0-9_.]+\/(p|reels?)\/[A-Za-z0-9_-]+\/?$/.test(resolved.pathname)) {
+        resolved.pathname = resolved.pathname.replace(/^\/[^/]+/, "");
+      }
+      const parsed = parsePostUrl(resolved.href);
+      return parsed.platform === expected.platform && parsed.postId === expected.postId;
+    } catch {
+      return false;
+    }
+  }
+
   // extension/popover.ts
   var scope = globalThis;
   if (scope.__memoarPopover) scope.__memoarPopover.close();
@@ -184,6 +201,8 @@
     };
     onKey = onKey2, onOutside = onOutside2;
     const previousFocus = document.activeElement;
+    const pageUrl = location.href;
+    let navigationCheck;
     const host = document.createElement("div");
     host.style.cssText = 'all:initial!important;font:14px/1.5 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif!important;color:#12171c!important;color-scheme:light!important;position:fixed!important;inset:16px 16px auto auto!important;width:min(360px,calc(100vw - 32px))!important;z-index:2147483647!important;';
     const shadow = host.attachShadow({ mode: "closed" });
@@ -211,6 +230,7 @@
     shadow.append(style, panel);
     document.documentElement.append(host);
     const state = { host, close: () => {
+      clearInterval(navigationCheck);
       document.removeEventListener("keydown", onKey2, true);
       document.removeEventListener("pointerdown", onOutside2, true);
       host.remove();
@@ -222,7 +242,15 @@
     document.addEventListener("pointerdown", onOutside2, true);
     scope.__memoarPopover = state;
     const data = (svg) => "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
-    mountPopup(shadow, location.href, { instagram: data(instagram_default), threads: data(threads_default), facebook: data(facebook_default) });
+    mountPopup(shadow, pageUrl, { instagram: data(instagram_default), threads: data(threads_default), facebook: data(facebook_default) });
+    navigationCheck = setInterval(() => {
+      if (location.href === pageUrl) return;
+      try {
+        if (samePost(location.href, parsePostUrl(pageUrl))) return;
+      } catch {
+      }
+      state.close();
+    }, 300);
     close.focus({ preventScroll: true });
   }
   var onKey;
