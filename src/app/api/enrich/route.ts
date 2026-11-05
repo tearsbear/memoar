@@ -20,7 +20,7 @@ export async function POST(request: Request) {
   const limit = url.origin === LOCAL_MEMOAR_ORIGIN ? 53 * 1024 * 1024 : 4 * 1024 * 1024;
   const key = process.env.MODEL_API_KEY?.trim();
   if (!key) return json({ error: 'AI processing is not configured yet.' }, 503);
-  if (Number(request.headers.get('content-length') ?? Infinity) > limit) return json({ error: 'Post media exceeds this server’s processing limit. Your post remains saved.' }, 413);
+  if (Number(request.headers.get('content-length') ?? Infinity) > limit) return json({ code: 'payload_too_large', error: 'Post media exceeds this server’s processing limit. Your post remains saved.' }, 413);
   if (active) return json({ error: 'Another post is being organized. Retry shortly.' }, 429);
   if (Date.now() - windowStart > 3600000) { windowStart = Date.now(); calls = 0; }
   if (calls >= 20) return json({ error: 'The hourly AI limit for this server instance has been reached. Try later.' }, 429);
@@ -51,7 +51,7 @@ async function processCapture(request: Request, key: string, cancelled: AbortSig
     const reader = request.body?.getReader();
     if (!reader) return json({ error: 'No captured post was supplied.' }, 400);
     const chunks: Uint8Array<ArrayBuffer>[] = []; let size = 0;
-    while (true) { const result = await reader.read(); if (result.done) break; size += result.value.byteLength; if (size > limit) { await reader.cancel(); return json({ error: 'Post media exceeds this server’s processing limit. Your post remains saved.' }, 413); } chunks.push(result.value); }
+    while (true) { const result = await reader.read(); if (result.done) break; size += result.value.byteLength; if (size > limit) { await reader.cancel(); return json({ code: 'payload_too_large', error: 'Post media exceeds this server’s processing limit. Your post remains saved.' }, 413); } chunks.push(result.value); }
     const form = await new Response(new Blob(chunks), { headers: { 'Content-Type': request.headers.get('content-type') ?? '' } }).formData();
     const raw = form.get('capture');
     if (typeof raw !== 'string') return json({ error: 'No captured post was supplied.' }, 400);

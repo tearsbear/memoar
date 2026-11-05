@@ -2,7 +2,21 @@
 
 Save social posts to a local library and find them again through search, filters, and collections. Muse Spark automatically organizes captured content after each save.
 
-Website: [memoar-theta.vercel.app](https://memoar-theta.vercel.app). To get started, download the extension from the [install guide](https://memoar-theta.vercel.app/getting-started#install), then connect your browser. No local server is needed when using the hosted website.
+Hosted demo: [memoar-theta.vercel.app](https://memoar-theta.vercel.app).
+
+**Run Memoar locally for now**, especially when analyzing videos or larger carousels. The local API accepts larger requests; the hosted demo has a smaller upload limit. Neither mode permanently archives videos or guarantees that every post can be captured or analyzed.
+
+## Local vs hosted
+
+| | Local (recommended) | Hosted demo |
+| --- | --- | --- |
+| Website | `http://localhost:3000` | `https://memoar-theta.vercel.app` |
+| Server | Keep `npm run dev` running | Runs on Vercel; no local server needed |
+| Extension build | Set `MEMOAR_EXTENSION_ORIGIN=http://localhost:3000` | Default `npm run extension:build` |
+| AI request limit | 53 MiB total | 4 MiB total |
+| API credentials | Your `.env.local` | Deployment owner's server-side Vercel variables |
+
+Both modes keep the main library in the extension's Chrome profile and send supported AI inputs to Meta. Local mode still needs internet for Meta APIs. Website caches are separate, and starting a local website does not change an installed extension's target URL.
 
 ## Tech stack
 
@@ -30,7 +44,7 @@ MEMOAR_ENRICHMENT_TOKEN=your_random_secret_at_least_24_characters
 
 Both values stay on the server. `MEMOAR_ENRICHMENT_TOKEN` signs access tokens; it is not a Meta API key. `NEXT_PUBLIC_MEMOAR_EXTENSION_ID` is optional because the extension can supply its ID when opening the website.
 
-Build an extension targeting the local server and start the website:
+Open a terminal in this project folder and run these commands in order. If the local server is already running, stop it with Ctrl+C first:
 
 ```sh
 MEMOAR_EXTENSION_ORIGIN=http://localhost:3000 npm run extension:build
@@ -39,7 +53,9 @@ npm run dev
 
 The extension build creates `extension/dist` and `extension/memoar-extension.zip`. Without the origin override, it targets `https://memoar-theta.vercel.app`. Rebuild after changing extension source.
 
-Open [http://localhost:3000](http://localhost:3000) in the same Chrome profile as the extension. Use this exact address for the local connection. Restart the server after changing `.env.local`.
+Keep that terminal running. In Chrome, open `chrome://extensions` and click **Reload** on Memoar if it was loaded from this project's `extension/dist`. For a first install, enable **Developer mode**, click **Load unpacked**, and select `extension/dist`. If you installed from an extracted ZIP, update that folder with the new local build before reloading it.
+
+Open [http://localhost:3000](http://localhost:3000) in the same Chrome profile as the extension, then connect through **Your library** or the local `/setup` page. **Open in Memoar** should now open localhost. Restart the server after changing `.env.local`.
 
 ## Vercel deployment
 
@@ -52,7 +68,7 @@ The extension allows only this hosted domain and `http://localhost:3000`. Previe
 
 ## Import the extension into Chrome
 
-1. Click **Download extension ZIP** in the [install guide](https://memoar-theta.vercel.app/getting-started#install) or on the setup page. Your browser saves it to your default download folder (usually Downloads), or asks you to choose a location if that setting is enabled.
+1. For local use, follow the steps above or download the ZIP from your local `/setup` page after building for localhost. For the hosted demo, use its [install guide](https://memoar-theta.vercel.app/getting-started#install). Your browser saves the ZIP to your default download folder (usually Downloads), or asks for a location if that setting is enabled.
 2. Extract `memoar-extension.zip` into a folder you will keep.
 3. Open `chrome://extensions` and enable **Developer mode**.
 4. Click **Load unpacked** and select the extracted folder containing `manifest.json`, not the ZIP file. Developers can also select `extension/dist` directly.
@@ -88,7 +104,13 @@ Use direct post links. Profiles, Stories, share/short links, `permalink.php`, an
 4. Muse Spark returns categories, topics, per-slide summaries, visible text, objects, brands, and search keywords based on the supplied inputs. Analysis is text-only when media is unavailable.
 5. Results are stored in the extension and synced to the website for search and related posts. Searching does not make additional AI calls.
 
-The API must be configured and reachable for analysis. For local development, keep the local server running. Retryable jobs get up to three attempts; failed analysis leaves the saved post intact, with a retry action in its details. Preview snapshots and oEmbed metadata are display-only and never enter AI inputs.
+The API must be configured and reachable for analysis. For local development, keep the local server running. Retryable jobs get up to three attempts; failed analysis leaves the saved post intact. Upload-size failures stop automatic retries and explain that retrying unchanged will not help. Retry is unavailable on the same server; after switching the extension build and dashboard to another server, you can try there. Temporary video input may expire after 24 hours. Preview snapshots and oEmbed metadata are display-only and never enter AI inputs.
+
+## Upload-size errors
+
+The limit covers the entire request: captured text, all attached media, and multipart overhead. A video can be saved locally but still be too large to send to the hosted AI API. Rebuild and reload the extension for localhost, run the local server, connect the local dashboard, then retry there if the required inputs are still available. Local processing also has size and media-validation limits.
+
+Removing Memoar's 4 MiB hosted check does **not** remove [Vercel's 4.5 MB request limit](https://vercel.com/docs/functions/limitations). Larger uploads can be rejected by Vercel with [HTTP 413 / FUNCTION_PAYLOAD_TOO_LARGE](https://vercel.com/docs/errors/function_payload_too_large) before the API handler processes them. Increasing the code limit or retrying the same request will not bypass this. Large hosted uploads need a different upload path, such as direct uploads to temporary object storage; this is not implemented.
 
 ## Storage and limitations
 
