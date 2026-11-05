@@ -112,6 +112,76 @@ Use direct post links. Profiles, Stories, share/short links, `permalink.php`, an
 
 The API must be configured and reachable for analysis. For local development, keep the local server running. Retryable jobs get up to three attempts; failed analysis leaves the saved post intact. Upload-size failures stop automatic retries and explain that retrying unchanged will not help. Retry is unavailable for a current size-limit failure on the same server. Older 4 MiB failures can be retried after updating the extension and configuring private Blob. Missing Blob configuration stops automatic retries and explains what the project owner must configure. Temporary video input may expire after 24 hours. Preview snapshots and oEmbed metadata are display-only and never enter AI inputs.
 
+### Example input and output
+
+Illustrative example, not a recorded API result: one captured slide shows an empty-state design with the readable phrases “Add a clear next step” and “Add your first item.” The caption says “Use one primary action in an empty state.”
+
+**Input to Muse Spark** (`POST https://api.meta.ai/v1/responses`, abridged):
+
+```json
+{
+  "model": "muse-spark-1.3",
+  "store": false,
+  "reasoning": { "effort": "low" },
+  "max_output_tokens": 8192,
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "<enrichmentPrompt>\nCapture is limited to supplied content.\nCaptured context: {\"caption\":\"Use one primary action in an empty state.\",\"authorHandle\":null}\nMP4 audio-track evidence (presence does not establish speech): []"
+        },
+        { "type": "input_text", "text": "Slide position: 1" },
+        { "type": "input_image", "image_url": "data:image/jpeg;base64,<verified-image-bytes>" }
+      ]
+    }
+  ]
+}
+```
+
+`<enrichmentPrompt>` and `<verified-image-bytes>` are documentation placeholders. The actual request also includes `text.format` with `type: "json_schema"`, `name: "content_enrichment"`, `strict: true`, and the full [enrichment schema](src/lib/inspection/enrichment.ts). That schema is omitted above for readability. The [API route](src/app/api/enrich/route.ts) assembles the request; the [prompt](src/lib/inspection/enrichment.ts) separates visual observations from caption claims and requires unknown values to stay `null` or empty.
+
+For video, the server uploads verified MP4 bytes to Meta Files first and supplies `{ "type": "input_video", "file_id": "<Meta-file-id>" }` instead of an image data URL. Each media item keeps its captured slide position. Private Blob URLs, upload tickets, preview snapshots, and oEmbed metadata are not sent as model inputs.
+
+**Parsed output** (illustrative, matching the schema):
+
+```json
+{
+  "category": "UX design",
+  "topics": ["Empty states", "Calls to action"],
+  "visualDescription": "An empty-state interface with a button and an annotation pointing to its next action.",
+  "slides": [
+    {
+      "position": 1,
+      "summary": "The slide recommends giving an empty state a clear next action.",
+      "keyInsights": ["The example button is labelled Add your first item."]
+    }
+  ],
+  "objects": [
+    {
+      "name": null,
+      "type": "empty-state panel",
+      "position": { "slide": 1, "region": "center" },
+      "attributes": [],
+      "evidence": [
+        { "claim": "empty-state panel", "source": "visual", "text": null },
+        { "claim": "center", "source": "visual", "text": null }
+      ]
+    }
+  ],
+  "brands": [],
+  "visibleText": ["Add a clear next step", "Add your first item"],
+  "rawVisibleText": ["Add a clear next step", "Add your first item"],
+  "visualKeywords": ["empty-state panel", "button", "annotation"],
+  "searchableKeywords": ["empty state with a clear next action", "primary action in an empty state"],
+  "captionContext": { "summary": null, "productNames": [], "locations": [] }
+}
+```
+
+The server parses the model's JSON, validates it against the schema, and cleans duplicate search-facing OCR in `visibleText`, leaving `rawVisibleText` unchanged. It returns an NDJSON result event containing `type: "result"`, `ok: true`, `enrichment` (the object above), and `inputNote` describing the actual input coverage. The extension validates the result again and stores it with the model name and coverage note. These fields support lexical search and related-post matching; no new AI call is made when searching. Text-only results have empty visual fields rather than invented media observations.
+
 ## Upload-size errors
 
 Small hosted requests keep the existing direct-upload path and do not require Blob. Larger uploads automatically use private Blob; missing storage configuration produces an actionable error without automatic retries.
