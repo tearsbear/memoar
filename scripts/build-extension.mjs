@@ -23,7 +23,8 @@ await mkdir(path.join(output, 'platforms'), { recursive: true });
 for (const name of ['instagram.svg', 'threads.svg', 'facebook.svg', 'LICENSE']) await copyFile(path.join(root, 'public/platforms', name), path.join(output, 'platforms', name));
 const manifest = JSON.parse(await readFile(path.join(output, 'manifest.json'), 'utf8'));
 const expectedHosts = JSON.stringify(['https://memoar-theta.vercel.app/*', 'http://localhost/*']);
-if (manifest.manifest_version !== 3 || manifest.permissions.join(',') !== 'activeTab,scripting,storage,alarms,notifications' || JSON.stringify(manifest.host_permissions) !== expectedHosts || JSON.stringify(manifest.externally_connectable?.matches) !== expectedHosts || manifest.content_scripts) {
+const expectedUploadHosts = JSON.stringify(['https://memoar-theta.vercel.app/*', 'http://localhost/*', 'https://vercel.com/api/blob/*', 'https://*.blob.vercel-storage.com/*']);
+if (manifest.manifest_version !== 3 || manifest.permissions.join(',') !== 'activeTab,scripting,storage,alarms,notifications' || JSON.stringify(manifest.host_permissions) !== expectedUploadHosts || JSON.stringify(manifest.externally_connectable?.matches) !== expectedHosts || manifest.content_scripts) {
   throw new Error('Unexpected extension permissions or automatic content scripts.');
 }
 const archive = path.join(root, 'extension/memoar-extension.zip');

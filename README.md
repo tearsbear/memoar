@@ -4,7 +4,7 @@ Save social posts to a local library and find them again through search, filters
 
 Hosted demo: [memoar-theta.vercel.app](https://memoar-theta.vercel.app).
 
-**Run Memoar locally for now**, especially when analyzing videos or larger carousels. The local API accepts larger requests; the hosted demo has a smaller upload limit. Neither mode permanently archives videos or guarantees that every post can be captured or analyzed.
+**Run Memoar locally for now**, especially when analyzing videos or larger carousels. Local use needs fewer services. Hosted media processing now uses private Vercel Blob transit storage, which must be configured and manually verified after deployment. Neither mode permanently archives videos or guarantees that every post can be captured or analyzed.
 
 ## Local vs hosted
 
@@ -13,7 +13,8 @@ Hosted demo: [memoar-theta.vercel.app](https://memoar-theta.vercel.app).
 | Website | `http://localhost:3000` | `https://memoar-theta.vercel.app` |
 | Server | Keep `npm run dev` running | Runs on Vercel; no local server needed |
 | Extension build | Set `MEMOAR_EXTENSION_ORIGIN=http://localhost:3000` | Default `npm run extension:build` |
-| AI request limit | 53 MiB total | 4 MiB total |
+| AI input limit | 53 MiB total | 53 MiB via private Blob; API request bodies remain capped at 4 MiB |
+| Large-media transit | Extension → local server → Meta | Extension → private Blob → server → Meta |
 | API credentials | Your `.env.local` | Deployment owner's server-side Vercel variables |
 
 Both modes keep the main library in the extension's Chrome profile and send supported AI inputs to Meta. Local mode still needs internet for Meta APIs. Website caches are separate, and starting a local website does not change an installed extension's target URL.
@@ -25,6 +26,7 @@ Both modes keep the main library in the extension's Chrome profile and send supp
 - Chrome Extension Manifest V3 for post capture.
 - IndexedDB for the extension library and website cache.
 - Meta Muse Spark 1.3 through a server-side API for content analysis.
+- Vercel Blob for private temporary media uploads on the hosted version.
 
 ## Local development
 
@@ -62,7 +64,11 @@ Open [http://localhost:3000](http://localhost:3000) in the same Chrome profile a
 1. Run `npm run extension:build` without the local origin override to create the hosted extension ZIP.
 2. Commit the source changes and `extension/memoar-extension.zip`, then push them to the repository connected to Vercel. Next.js explicitly includes the ZIP in the download endpoint's deployment bundle.
 3. Set `MODEL_API_KEY` and `MEMOAR_ENRICHMENT_TOKEN` in Vercel's production environment variables. Keep both server-only; the signing secret must be at least 24 characters.
-4. Use `npm run build` as the Vercel build command, deploy to `https://memoar-theta.vercel.app`, and redeploy after environment changes.
+4. In the Vercel project's **Storage** section, create/connect a **private Blob store**. Ensure its `BLOB_READ_WRITE_TOKEN` is available to the Production environment. Do not use a public store or put this secret in `NEXT_PUBLIC_` variables.
+5. Add a random server-only `CRON_SECRET` for the daily cleanup job configured in `vercel.json`.
+6. Use `npm run build` as the Vercel build command, deploy to `https://memoar-theta.vercel.app`, and redeploy after environment changes. Rebuild/reinstall or reload extension version 0.3.0 and approve the added Blob upload host permissions.
+
+The implementation is source-checked, not live-verified. Manually verify an image, a video above 4 MiB, AI completion, temporary-file deletion, and the cleanup cron after deployment. Blob storage and transfer may incur charges. Local mode continues to work without Blob credentials.
 
 The extension allows only this hosted domain and `http://localhost:3000`. Preview deployment domains are not connected. Downloading an updated ZIP does not update an already-installed unpacked extension automatically.
 
@@ -100,23 +106,27 @@ Use direct post links. Profiles, Stories, share/short links, `permalink.php`, an
 
 1. The extension captures available post content from the open page after you click save.
 2. Content is saved to the extension's IndexedDB first, then automatically queued for analysis without an AI toggle.
-3. The website pairs the extension with its API. The extension worker sends captured text and validated media to `/api/enrich` on its configured Memoar origin; the server forwards them to Muse Spark 1.3 using the server-side API key.
+3. The website pairs the extension with its API. Locally, text and validated media go directly to `/api/enrich`. Large hosted media goes directly to private Blob using short-lived, file-specific upload tokens; only captured context and signed file references go to `/api/enrich`. The server checks the stored media size and SHA-256 before forwarding inputs to Muse Spark 1.3. The Meta key and Blob read-write token stay on the server.
 4. Muse Spark returns categories, topics, per-slide summaries, visible text, objects, brands, and search keywords based on the supplied inputs. Analysis is text-only when media is unavailable.
 5. Results are stored in the extension and synced to the website for search and related posts. Searching does not make additional AI calls.
 
-The API must be configured and reachable for analysis. For local development, keep the local server running. Retryable jobs get up to three attempts; failed analysis leaves the saved post intact. Upload-size failures stop automatic retries and explain that retrying unchanged will not help. Retry is unavailable on the same server; after switching the extension build and dashboard to another server, you can try there. Temporary video input may expire after 24 hours. Preview snapshots and oEmbed metadata are display-only and never enter AI inputs.
+The API must be configured and reachable for analysis. For local development, keep the local server running. Retryable jobs get up to three attempts; failed analysis leaves the saved post intact. Upload-size failures stop automatic retries and explain that retrying unchanged will not help. Retry is unavailable for a current size-limit failure on the same server. Older 4 MiB failures can be retried after updating the extension and configuring private Blob. Missing Blob configuration stops automatic retries and explains what the project owner must configure. Temporary video input may expire after 24 hours. Preview snapshots and oEmbed metadata are display-only and never enter AI inputs.
 
 ## Upload-size errors
 
-The limit covers the entire request: captured text, all attached media, and multipart overhead. A video can be saved locally but still be too large to send to the hosted AI API. Rebuild and reload the extension for localhost, run the local server, connect the local dashboard, then retry there if the required inputs are still available. Local processing also has size and media-validation limits.
+Small hosted requests keep the existing direct-upload path and do not require Blob. Larger uploads automatically use private Blob; missing storage configuration produces an actionable error without automatic retries.
 
-Removing Memoar's 4 MiB hosted check does **not** remove [Vercel's 4.5 MB request limit](https://vercel.com/docs/functions/limitations). Larger uploads can be rejected by Vercel with [HTTP 413 / FUNCTION_PAYLOAD_TOO_LARGE](https://vercel.com/docs/errors/function_payload_too_large) before the API handler processes them. Increasing the code limit or retrying the same request will not bypass this. Large hosted uploads need a different upload path, such as direct uploads to temporary object storage; this is not implemented.
+Local multipart requests and hosted staged inputs are limited to 53 MiB, including captured context and all attached media. Existing per-file capture/format checks still apply. Retrying an unchanged post above this limit will not help.
+
+[Vercel's 4.5 MB request limit](https://vercel.com/docs/functions/limitations) still applies to API request bodies. For larger media, the new hosted extension sends only a small manifest to the API and uploads media directly to Blob, avoiding that bottleneck. If an older extension still gets the 4 MiB error, rebuild/reload it and retry after configuring private Blob. Temporary video input may already have expired; this change does not restore deleted media.
+
+The server and extension attempt to delete staged files after each processing attempt. A daily cron removes files older than 24 hours under the dedicated `memoar-ai/` prefix, including uploads abandoned by an interrupted worker. Cleanup is best-effort: files can remain longer if deletion, cron authentication, or the scheduled invocation fails. Check the Blob store and cron logs after deployment.
 
 ## Storage and limitations
 
 - The main library lives in the Chrome profile where the extension is installed. The website keeps a cache; there is no cloud sync or server database.
-- Analysis sends available content to Meta and may use API quota. Only save content you are authorized to process, and review AI results.
+- Analysis sends available content to Meta and, on hosted builds, through private temporary Blob storage. It may use API and storage/transfer quota. Only save content you are authorized to process, and review AI results.
 - Full videos are not archived permanently. Metadata exports exclude original media files and are not complete backups.
 - Removing the extension or clearing browser storage can erase the library. Local and hosted website caches are separate; the extension remains the main library.
-- Hosted AI requests are capped at 4 MiB including captured text and all attached media, below [Vercel's 4.5 MB payload limit](https://vercel.com/docs/functions/limitations). Larger posts remain saved but cannot be analyzed through this endpoint; large video uploads are not supported on the hosted API.
+- Temporary Blob files are only for AI transit, not permanent video archives or playback. No cloud library or cloud sync is added.
 - The AI concurrency and hourly limits apply per server instance, not across all Vercel instances. This is a demo without account-based usage quotas.

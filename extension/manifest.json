@@ -1,11 +1,11 @@
 {
   "manifest_version": 3,
   "name": "Memoar",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Save social posts to your personal, searchable library in this browser.",
   "minimum_chrome_version": "112",
   "permissions": ["activeTab", "scripting", "storage", "alarms", "notifications"],
-  "host_permissions": ["https://memoar-theta.vercel.app/*", "http://localhost/*"],
+  "host_permissions": ["https://memoar-theta.vercel.app/*", "http://localhost/*", "https://vercel.com/api/blob/*", "https://*.blob.vercel-storage.com/*"],
   "icons": { "128": "memoar-icon.png" },
   "action": { "default_title": "Memoar", "default_icon": "memoar-icon.png" },
   "background": { "service_worker": "background.js" },

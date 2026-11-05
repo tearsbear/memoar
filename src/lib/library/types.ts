@@ -16,7 +16,7 @@ export type SavedPost = {
   attempts: number; nextAttemptAt: number; leaseUntil: number; model: string | null;
   mediaStored: number[]; mediaNote: string | null;
   aiInputNote?: string;
-  aiErrorCode?: 'payload_too_large'; aiErrorOrigin?: string;
+  aiErrorCode?: 'payload_too_large' | 'storage_not_configured'; aiErrorOrigin?: string;
   lastOpenedAt?: string; lastReviewedAt?: string; remindAfter?: string;
 };
 export type LibraryPreferences = { aiEnabled: boolean; reminders: boolean; cadence: 'daily' | 'weekly' | 'monthly'; ageDays: number };

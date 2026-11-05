@@ -6,6 +6,7 @@ import { isMemoarOrigin, LOCAL_MEMOAR_ORIGIN } from '@/lib/capture/protocol';
 import { enrichmentPrompt, enrichmentSchema, cleanVisibleText } from '@/lib/inspection/enrichment';
 import { parseEnrichment } from '@/lib/library/enrichment';
 import { modelExport } from '@/lib/inspection/model-export';
+import { deleteStaged, hash, MAX_STAGED_BYTES, readStaged, verifyStage } from '@/lib/library/staged-media';
 
 export const runtime = 'nodejs';
 export const maxDuration = 240;
@@ -32,7 +33,7 @@ export async function POST(request: Request) {
       const send = (value: unknown) => { if (!abort.signal.aborted) controller.enqueue(encoder.encode(JSON.stringify(value) + '\n')); };
       send({ type: 'heartbeat' });
       const heartbeat = setInterval(() => send({ type: 'heartbeat' }), 15000);
-      void processCapture(request, key, abort.signal, limit).then(async response => {
+      void processCapture(request, key, abort.signal, limit, actual).then(async response => {
         send({ type: 'result', ok: response.ok, ...await response.json() });
       }).catch(() => send({ type: 'result', ok: false, error: 'AI processing was interrupted. Your post remains saved.' })).finally(() => {
         clearInterval(heartbeat); active = false;
@@ -44,15 +45,34 @@ export async function POST(request: Request) {
   return new Response(stream, { headers: { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-store', 'X-Accel-Buffering': 'no' } });
 }
 
-async function processCapture(request: Request, key: string, cancelled: AbortSignal, limit: number): Promise<Response> {
-  const uploaded: string[] = [];
+async function processCapture(request: Request, key: string, cancelled: AbortSignal, limit: number, auth: string): Promise<Response> {
+  const uploaded: string[] = [], stagedPaths: string[] = [];
   const deadline = AbortSignal.any([request.signal, cancelled, AbortSignal.timeout(210000)]);
   try {
     const reader = request.body?.getReader();
     if (!reader) return json({ error: 'No captured post was supplied.' }, 400);
     const chunks: Uint8Array<ArrayBuffer>[] = []; let size = 0;
     while (true) { const result = await reader.read(); if (result.done) break; size += result.value.byteLength; if (size > limit) { await reader.cancel(); return json({ code: 'payload_too_large', error: 'Post media exceeds this server’s processing limit. Your post remains saved.' }, 413); } chunks.push(result.value); }
-    const form = await new Response(new Blob(chunks), { headers: { 'Content-Type': request.headers.get('content-type') ?? '' } }).formData();
+    const body = new Blob(chunks);
+    let form: FormData;
+    if (request.headers.get('content-type')?.includes('application/json')) {
+      const manifest = JSON.parse(await body.text());
+      if (typeof manifest.capture !== 'string' || !Array.isArray(manifest.tickets) || manifest.tickets.length > 20) return json({ error: 'Invalid staged media manifest.' }, 400);
+      const tickets = manifest.tickets.map((signed: unknown) => verifyStage(signed, auth));
+      stagedPaths.push(...tickets.map((ticket: { path: string }) => ticket.path));
+      const captureHash = hash(manifest.capture);
+      const seen = new Set<number>();
+      let total = Buffer.byteLength(manifest.capture);
+      const captured = normalizeCapture(JSON.parse(manifest.capture));
+      for (const ticket of tickets) {
+        const item = captured.inspection.media?.items[ticket.index];
+        if (ticket.captureHash !== captureHash || seen.has(ticket.index) || item?.assetAccess !== 'verified_accessible' || !item.verification || item.verification.mimeType !== ticket.mime || item.verification.byteLength !== ticket.bytes) return json({ error: 'Staged media does not match the captured post.' }, 400);
+        seen.add(ticket.index); total += ticket.bytes;
+      }
+      if (total > MAX_STAGED_BYTES) return json({ code: 'payload_too_large', error: 'This post exceeds the 53 MiB processing limit.' }, 413);
+      form = new FormData(); form.set('capture', manifest.capture);
+      for (const ticket of tickets) form.set(`media-${ticket.index}`, await readStaged(ticket, deadline));
+    } else form = await new Response(body, { headers: { 'Content-Type': request.headers.get('content-type') ?? '' } }).formData();
     const raw = form.get('capture');
     if (typeof raw !== 'string') return json({ error: 'No captured post was supplied.' }, 400);
     const capture = normalizeCapture(JSON.parse(raw));
@@ -90,6 +110,6 @@ async function processCapture(request: Request, key: string, cancelled: AbortSig
     return json({ enrichment, inputNote });
   } catch { return json({ error: 'AI processing did not finish. Your post remains saved; try again later.' }, 502); }
   finally {
-    await Promise.allSettled(uploaded.map(id => fetch(`https://api.meta.ai/v1/files/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { Authorization: `Bearer ${key}` }, redirect: 'error', signal: AbortSignal.timeout(10000) })));
+    await Promise.allSettled([deleteStaged(stagedPaths), ...uploaded.map(id => fetch(`https://api.meta.ai/v1/files/${encodeURIComponent(id)}`, { method: 'DELETE', headers: { Authorization: `Bearer ${key}` }, redirect: 'error', signal: AbortSignal.timeout(10000) }))]);
   }
 }

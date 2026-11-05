@@ -8,6 +8,7 @@ import { MEMOAR_ORIGIN, LOCAL_MEMOAR_ORIGIN } from '../src/lib/capture/protocol'
 import { MEDIA_CHUNK_BYTES } from '../src/lib/capture/media-cache';
 import { claimMediaTransfer, transferMedia } from './media-transfer';
 import { reviewIntervalMs } from '../src/lib/library/review';
+import { stageUpload, StageUploadError } from './staged-upload';
 
 export const savedLibrary = libraryStore('memoar-library');
 export async function preferences(): Promise<LibraryPreferences> {
@@ -61,7 +62,6 @@ export async function runEnrichmentQueue() {
     await savedLibrary.purgeTemporary();
     if (!(await preferences()).aiEnabled) return;
     for (const item of await savedLibrary.list()) {
-      if (MEMOAR_ORIGIN !== LOCAL_MEMOAR_ORIGIN && item.aiError?.startsWith('This post is too large for the AI server.')) await savedLibrary.update(item.id, value => ({ ...value, aiStatus: 'failed_terminal', aiError: 'This post exceeds the hosted 4 MiB AI request limit. Retrying here will not help. Switch to the local extension build and local server, then retry there. Your post remains saved.', aiErrorCode: 'payload_too_large', aiErrorOrigin: MEMOAR_ORIGIN, leaseUntil: 0, updatedAt: new Date().toISOString() }));
       if (!item.aiConsent) await savedLibrary.update(item.id, value => ({ ...value, aiConsent: true, nextAttemptAt: 0, updatedAt: new Date().toISOString() }));
       if (item.aiStatus === 'processing' && item.leaseUntil <= Date.now() && item.attempts >= 3) await savedLibrary.update(item.id, value => ({ ...value, aiStatus: 'failed_terminal', aiError: 'Processing was interrupted. Retry organizing when ready.', leaseUntil: 0, updatedAt: new Date().toISOString() }));
     }
@@ -71,18 +71,27 @@ export async function runEnrichmentQueue() {
     if (typeof token !== 'string' || !token) {
       await savedLibrary.update(post.id, value => ({ ...value, aiStatus: 'failed_retryable', aiError: 'Open Memoar to connect background organizing.', nextAttemptAt: Date.now() + 300000, updatedAt: new Date().toISOString() })); return;
     }
-    await savedLibrary.update(post.id, value => ({ ...value, aiStatus: 'processing', attempts: value.attempts + 1, leaseUntil: Date.now() + 300000, updatedAt: new Date().toISOString() }));
+    await savedLibrary.update(post.id, value => ({ ...value, aiStatus: 'processing', attempts: value.attempts + 1, leaseUntil: Date.now() + 600000, updatedAt: new Date().toISOString() }));
     // Chrome API activity keeps an active job alive; the persisted lease handles termination.
     const keepAlive = setInterval(() => { void chrome.runtime.getPlatformInfo().catch(() => {}); }, 20000);
     let oversized = false;
+    let cleanupUpload: (() => Promise<void>) | undefined;
     const sizeError = MEMOAR_ORIGIN === LOCAL_MEMOAR_ORIGIN
       ? 'This post exceeds the local 53 MiB AI request limit. Retrying unchanged will not help. Your post remains saved.'
-      : 'This post exceeds the hosted 4 MiB AI request limit. Retrying here will not help. Switch to the local extension build and local server, then retry there. Your post remains saved.';
+      : 'This post exceeds the 53 MiB AI processing limit. Retrying unchanged will not help. Your post remains saved.';
     try {
       const form = new FormData();
       form.set('capture', JSON.stringify(post.capture));
-      for (const asset of await savedLibrary.assets(post.id)) form.append(`media-${asset.itemIndex}`, asset.blob, `slide-${asset.itemIndex}.${asset.mimeType === 'video/mp4' ? 'mp4' : 'image'}`);
-      const response = await fetch(`${MEMOAR_ORIGIN}/api/enrich`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: form, redirect: 'error', signal: AbortSignal.timeout(240000) });
+      const assets = await savedLibrary.assets(post.id);
+      for (const asset of assets) form.append(`media-${asset.itemIndex}`, asset.blob, `slide-${asset.itemIndex}.${asset.mimeType === 'video/mp4' ? 'mp4' : 'image'}`);
+      let body: BodyInit = form;
+      const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
+      const directBytes = new TextEncoder().encode(JSON.stringify(post.capture)).byteLength + assets.reduce((total, asset) => total + asset.blob.size, 0) + 64 * 1024;
+      if (MEMOAR_ORIGIN !== LOCAL_MEMOAR_ORIGIN && assets.length && directBytes > 4 * 1024 * 1024) {
+        const staged = await stageUpload(post, assets, token);
+        cleanupUpload = staged.cleanup; body = staged.body; headers['Content-Type'] = 'application/json';
+      }
+      const response = await fetch(`${MEMOAR_ORIGIN}/api/enrich`, { method: 'POST', headers, body, redirect: 'error', signal: AbortSignal.timeout(240000) });
       if (!response.ok) {
         if (response.status === 413) { oversized = true; throw new Error(sizeError); }
         const failure = await response.json();
@@ -111,8 +120,10 @@ export async function runEnrichmentQueue() {
       await savedLibrary.update(post.id, value => value.savedAt !== post.savedAt ? value : ({ ...value, aiStatus: 'completed', enrichment, model: 'muse-spark-1.3', aiInputNote: result?.inputNote, aiError: null, aiErrorCode: undefined, aiErrorOrigin: undefined, leaseUntil: 0, updatedAt: new Date().toISOString() }));
       await savedLibrary.dropTemporary(post.id, post.savedAt);
     } catch (error) {
-      await savedLibrary.update(post.id, value => value.savedAt !== post.savedAt ? value : ({ ...value, aiStatus: oversized || value.attempts >= 3 ? 'failed_terminal' : 'failed_retryable', aiError: error instanceof Error ? error.message.slice(0, 300) : 'Could not organize this post.', aiErrorCode: oversized ? 'payload_too_large' : undefined, aiErrorOrigin: oversized ? MEMOAR_ORIGIN : undefined, leaseUntil: 0, nextAttemptAt: Date.now() + value.attempts * 60000, updatedAt: new Date().toISOString() }));
-    } finally { clearInterval(keepAlive); }
+      if (error instanceof StageUploadError && error.code === 'payload_too_large') oversized = true;
+      const storageMissing = error instanceof StageUploadError && error.code === 'storage_not_configured';
+      await savedLibrary.update(post.id, value => value.savedAt !== post.savedAt ? value : ({ ...value, aiStatus: oversized || storageMissing || value.attempts >= 3 ? 'failed_terminal' : 'failed_retryable', aiError: error instanceof Error ? error.message.slice(0, 300) : 'Could not organize this post.', aiErrorCode: oversized ? 'payload_too_large' : storageMissing ? 'storage_not_configured' : undefined, aiErrorOrigin: oversized ? MEMOAR_ORIGIN : undefined, leaseUntil: 0, nextAttemptAt: Date.now() + value.attempts * 60000, updatedAt: new Date().toISOString() }));
+    } finally { await cleanupUpload?.().catch(() => {}); clearInterval(keepAlive); }
   } finally { working = false; }
 }
 export async function libraryMessage(request: LibraryRequest): Promise<Record<string, unknown>> {
@@ -148,7 +159,7 @@ export async function libraryMessage(request: LibraryRequest): Promise<Record<st
     }
     case 'MEMOAR_RETRY_AI': {
       const post = await savedLibrary.get(request.id);
-      if (post?.aiErrorCode === 'payload_too_large' && post.aiErrorOrigin === MEMOAR_ORIGIN) throw new Error(post.aiError || 'This post exceeds the server upload limit. Retrying unchanged will not help.');
+      if (post?.aiErrorCode === 'payload_too_large' && post.aiErrorOrigin === MEMOAR_ORIGIN && !post.aiError?.includes('4 MiB')) throw new Error(post.aiError || 'This post exceeds the server upload limit. Retrying unchanged will not help.');
       await savedLibrary.update(request.id, value => ({ ...value, aiStatus: 'pending', aiConsent: true, attempts: 0, nextAttemptAt: 0, aiError: null, aiErrorCode: undefined, aiErrorOrigin: undefined, updatedAt: new Date().toISOString() })); return {};
     }
     case 'MEMOAR_PREFERENCES': return { preferences: await preferences() };
