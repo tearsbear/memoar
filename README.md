@@ -2,7 +2,7 @@
 
 Save social posts to a local library and find them again through search, filters, and collections. Muse Spark automatically organizes captured content after each save.
 
-Website: [memoar.vercel.app](https://memoar.vercel.app). To get started, download the extension from the [install guide](https://memoar.vercel.app/getting-started#install), then connect your browser. No local server is needed when using the hosted website.
+Website: [memoar-theta.vercel.app](https://memoar-theta.vercel.app). To get started, download the extension from the [install guide](https://memoar-theta.vercel.app/getting-started#install), then connect your browser. No local server is needed when using the hosted website.
 
 ## Tech stack
 
@@ -37,7 +37,7 @@ MEMOAR_EXTENSION_ORIGIN=http://localhost:3000 npm run extension:build
 npm run dev
 ```
 
-The extension build creates `extension/dist` and `extension/memoar-extension.zip`. Without the origin override, it targets `https://memoar.vercel.app`. Rebuild after changing extension source.
+The extension build creates `extension/dist` and `extension/memoar-extension.zip`. Without the origin override, it targets `https://memoar-theta.vercel.app`. Rebuild after changing extension source.
 
 Open [http://localhost:3000](http://localhost:3000) in the same Chrome profile as the extension. Use this exact address for the local connection. Restart the server after changing `.env.local`.
 
@@ -46,20 +46,20 @@ Open [http://localhost:3000](http://localhost:3000) in the same Chrome profile a
 1. Run `npm run extension:build` without the local origin override to create the hosted extension ZIP.
 2. Commit the source changes and `extension/memoar-extension.zip`, then push them to the repository connected to Vercel. Next.js explicitly includes the ZIP in the download endpoint's deployment bundle.
 3. Set `MODEL_API_KEY` and `MEMOAR_ENRICHMENT_TOKEN` in Vercel's production environment variables. Keep both server-only; the signing secret must be at least 24 characters.
-4. Use `npm run build` as the Vercel build command, deploy to `https://memoar.vercel.app`, and redeploy after environment changes.
+4. Use `npm run build` as the Vercel build command, deploy to `https://memoar-theta.vercel.app`, and redeploy after environment changes.
 
 The extension allows only this hosted domain and `http://localhost:3000`. Preview deployment domains are not connected. Downloading an updated ZIP does not update an already-installed unpacked extension automatically.
 
 ## Import the extension into Chrome
 
-1. Click **Download extension ZIP** in the [install guide](https://memoar.vercel.app/getting-started#install) or on the setup page. Your browser saves it to your default download folder (usually Downloads), or asks you to choose a location if that setting is enabled.
+1. Click **Download extension ZIP** in the [install guide](https://memoar-theta.vercel.app/getting-started#install) or on the setup page. Your browser saves it to your default download folder (usually Downloads), or asks you to choose a location if that setting is enabled.
 2. Extract `memoar-extension.zip` into a folder you will keep.
 3. Open `chrome://extensions` and enable **Developer mode**.
 4. Click **Load unpacked** and select the extracted folder containing `manifest.json`, not the ZIP file. Developers can also select `extension/dist` directly.
 5. Pin Memoar to the Chrome toolbar.
 6. Click the Memoar icon on a web page, then choose **Your library** to connect the extension and import your library into the website.
 
-If needed, copy the extension ID from `chrome://extensions` into the [setup page](https://memoar.vercel.app/setup) (or `/setup` on your local server). After an update, download the rebuilt ZIP and replace the files in the same extracted folder, click **Reload** on its Chrome extension card, approve any new permissions, and refresh the social tab. If the download says the ZIP is not ready, the project owner needs to build and include it before redeploying.
+If needed, copy the extension ID from `chrome://extensions` into the [setup page](https://memoar-theta.vercel.app/setup) (or `/setup` on your local server). After an update, download the rebuilt ZIP and replace the files in the same extracted folder, click **Reload** on its Chrome extension card, approve any new permissions, and refresh the social tab. If the download says the ZIP is not ready, the project owner needs to build and include it before redeploying.
 
 ## How to use
 
@@ -72,11 +72,11 @@ The website imports updates while the dashboard is active, about every 20 second
 
 ## Supported platforms
 
-| Platform | Supported content / links |
-| --- | --- |
-| Instagram | Posts, carousels, and Reels (`/p/`, `/reel/`, `/reels/`). |
-| Threads | Text and media posts (`/@handle/post/id`, `/t/id`), including the `threads.net` domain. |
-| Facebook | Posts, Reels, videos, and watch links. Capture may be partial; video/watch previews fall back to the source link. |
+| Platform  | Supported content / links                                                                                         |
+| --------- | ----------------------------------------------------------------------------------------------------------------- |
+| Instagram | Posts, carousels, and Reels (`/p/`, `/reel/`, `/reels/`).                                                         |
+| Threads   | Text and media posts (`/@handle/post/id`, `/t/id`), including the `threads.net` domain.                           |
+| Facebook  | Posts, Reels, videos, and watch links. Capture may be partial; video/watch previews fall back to the source link. |
 
 Use direct post links. Profiles, Stories, share/short links, `permalink.php`, and `story.php` are not supported. Missing content stays marked as unavailable; a supported link does not guarantee that all media can be captured.
 
